@@ -1,0 +1,52 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.Python
+.mypy_cache
+.ruff_cache
+.pytest_cache
+.coverage
+.coverage.*
+htmlcov
+.tox
+.nox
+.hypothesis
+
+# Virtual environments
+.env
+.venv
+venv
+ENV
+
+# IDE
+.idea
+.vscode
+*.swp
+*.swo
+
+# Build artifacts
+build
+dist
+*.egg-info
+.eggs
+
+# Documentation
+*.md
+!README.md
+
+# Tests (optional in production)
+**/tests
+
+# Local files
+.Claude
+REQ
+
+# OS
+.DS_Store
+Thumbs.db
