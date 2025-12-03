@@ -1,4 +1,22 @@
-"""Input classifier service for Telegram messages."""
+"""Input classifier service for Telegram messages.
+
+This module provides classification of Telegram message types using a
+Chain-of-Thought approach that systematically checks message attributes
+in order of specificity.
+
+Example:
+    Basic usage::
+
+        from telegram_bot.services.input_classifier import InputClassifier
+
+        classifier = InputClassifier()
+        input_type = classifier.classify(message)
+        print(f"Message type: {input_type.value}")
+
+Attributes:
+    InputType: Enumeration of all supported input types.
+    InputClassifier: Main classifier class for message type detection.
+"""
 
 from enum import Enum
 from typing import Any
@@ -11,7 +29,35 @@ logger = get_logger("input_classifier")
 
 
 class InputType(str, Enum):
-    """Enumeration of supported input types."""
+    """Enumeration of supported Telegram message input types.
+
+    This enum inherits from both str and Enum, allowing direct string
+    comparison and serialization while maintaining type safety.
+
+    Attributes:
+        TEXT: Plain text messages.
+        COMMAND: Bot commands starting with '/'.
+        PHOTO: Photo/image messages.
+        DOCUMENT: Document/file attachments.
+        VIDEO: Video messages.
+        AUDIO: Audio file messages.
+        VOICE: Voice recording messages.
+        VIDEO_NOTE: Round video messages.
+        STICKER: Sticker messages.
+        ANIMATION: GIF/animation messages.
+        LOCATION: Location sharing messages.
+        VENUE: Venue/place sharing messages.
+        CONTACT: Contact sharing messages.
+        POLL: Poll messages.
+        DICE: Dice/random number messages.
+        UNKNOWN: Unrecognized message types.
+
+    Example:
+        Check message type::
+
+            if input_type == InputType.TEXT:
+                print("This is a text message")
+    """
 
     TEXT = "text"
     COMMAND = "command"
@@ -34,8 +80,30 @@ class InputType(str, Enum):
 class InputClassifier:
     """Classifier for Telegram message input types.
 
-    Uses Chain-of-Thought approach by checking message attributes
-    in a systematic order based on specificity.
+    Uses a Chain-of-Thought approach by checking message attributes
+    in a systematic order based on specificity. Media types are checked
+    first, followed by special content types, then text-based content.
+
+    The classification priority order:
+        1. Media attachments (photo, document, video, audio, etc.)
+        2. Special content (location, venue, contact, poll, dice)
+        3. Text content (commands vs plain text)
+        4. Unknown (fallback)
+
+    Attributes:
+        _ATTRIBUTE_TYPE_MAP: Ordered mapping of message attributes to InputType.
+
+    Example:
+        Classify a message::
+
+            classifier = InputClassifier()
+            message = await bot.get_updates()[0].message
+            input_type = classifier.classify(message)
+
+            if input_type == InputType.PHOTO:
+                print("User sent a photo")
+            elif input_type == InputType.COMMAND:
+                print(f"User sent command: {message.text}")
     """
 
     # Mapping of message attributes to input types (order matters for priority)
@@ -75,7 +143,14 @@ class InputClassifier:
         return input_type
 
     def _classify_internal(self, message: Message) -> InputType:
-        """Internal classification logic."""
+        """Execute internal classification logic without logging.
+
+        Args:
+            message: The Telegram message to classify.
+
+        Returns:
+            The determined InputType for the message.
+        """
         # Check for media and special content types
         for attr, input_type in self._ATTRIBUTE_TYPE_MAP:
             if getattr(message, attr, None) is not None:

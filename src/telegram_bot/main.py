@@ -1,4 +1,20 @@
-"""Main entry point for the Telegram bot application."""
+"""Main entry point for the Telegram bot application.
+
+This module provides the main entry point for running the Telegram Bot
+webhook server using uvicorn with configurable multi-worker support.
+
+Example:
+    Run from command line::
+
+        telegram-bot
+
+    Or run directly::
+
+        python -m telegram_bot.main
+
+Attributes:
+    main: Main function to start the webhook server.
+"""
 
 import uvicorn
 
@@ -11,9 +27,28 @@ logger = get_logger("main")
 def main() -> None:
     """Run the Telegram bot webhook server.
 
-    Supports multiple workers for handling concurrent users.
-    In production (workers > 1), uses factory pattern for proper process isolation.
-    In development (workers = 1), can use direct app instance.
+    Starts the uvicorn ASGI server with the FastAPI application configured
+    for Telegram webhook handling. Supports multiple workers for handling
+    concurrent users with proper process isolation.
+
+    The server configuration includes:
+        - Multi-worker support via factory pattern
+        - Configurable concurrency limits
+        - Graceful shutdown handling
+        - Performance optimizations (httptools, uvloop)
+
+    Configuration is loaded from environment variables or .env file.
+    See Settings class for all available options.
+
+    Example:
+        Start server programmatically::
+
+            from telegram_bot.main import main
+            main()
+
+    Note:
+        In production (workers > 1), each worker creates its own app instance
+        using the factory pattern for proper process isolation.
     """
     settings = get_settings()
     setup_logging(settings.log_level, settings=settings)

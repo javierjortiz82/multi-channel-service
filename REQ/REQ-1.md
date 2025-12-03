@@ -38,6 +38,7 @@ pruebas, documentación, containerización y CI/CD.
     antes de decidir.
 -   Buenas prácticas SIEMPRE como prioridad.
 -   Utiliza https://www.makeareadme.com/ para generar documentación readme.md crear diagramas en mermaid usando un estilo visual atractivo y profesional.Utiliza colores de   formas y letras que sean visibles  en los diagramar de mermaid
+-   Google docstrings
 
 ## Reglas de Docker
 

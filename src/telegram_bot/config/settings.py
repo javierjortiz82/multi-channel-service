@@ -1,4 +1,20 @@
-"""Application settings using Pydantic v2."""
+"""Application settings using Pydantic v2.
+
+This module provides centralized configuration management for the Telegram Bot
+webhook service using Pydantic v2 settings with environment variable support.
+
+Example:
+    Basic usage::
+
+        from telegram_bot.config.settings import get_settings
+
+        settings = get_settings()
+        print(settings.webhook_url)
+
+Attributes:
+    Settings: Main settings class with all configuration options.
+    get_settings: Factory function to get cached settings instance.
+"""
 
 from functools import lru_cache
 from typing import Literal
@@ -8,7 +24,46 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    """Application settings with validation."""
+    """Application settings with validation.
+
+    This class manages all configuration for the Telegram Bot webhook service,
+    including Telegram API credentials, webhook configuration, server settings,
+    concurrency limits, timeouts, and logging options.
+
+    All settings can be configured via environment variables or a .env file.
+
+    Attributes:
+        telegram_bot_token: Bot API token from @BotFather.
+        webhook_host: Public hostname for webhook (must be HTTPS in production).
+        webhook_path: Path for the webhook endpoint.
+        webhook_secret: Secret token for webhook verification.
+        webhook_max_connections: Max simultaneous HTTPS connections (1-100).
+        webhook_ip_filter_enabled: Enable IP filtering for Telegram servers only.
+        webhook_drop_pending_updates: Drop pending updates on webhook setup.
+        server_host: Host to bind the server.
+        server_port: Port to bind the server.
+        environment: Application environment (development/staging/production).
+        log_level: Logging level.
+        debug: Enable debug mode.
+        workers: Number of uvicorn workers.
+        limit_concurrency: Max concurrent connections per worker.
+        limit_max_requests: Max requests per worker before restart.
+        backlog: Max connections in backlog queue.
+        timeout_keep_alive: Seconds to keep idle connections open.
+        timeout_graceful_shutdown: Seconds to wait for graceful shutdown.
+        http_implementation: HTTP protocol implementation.
+        loop_implementation: Event loop implementation.
+        log_to_file: Whether to write logs to file.
+        log_dir: Directory for log files.
+        log_max_size_mb: Max log file size before rotation.
+        log_backup_count: Number of backup log files to keep.
+
+    Example:
+        Create settings from environment::
+
+            settings = Settings()
+            print(f"Server running on {settings.server_host}:{settings.server_port}")
+    """
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -151,18 +206,67 @@ class Settings(BaseSettings):
     @field_validator("webhook_host")
     @classmethod
     def validate_webhook_host(cls, v: str) -> str:
-        """Ensure webhook host starts with https in production."""
+        """Validate and normalize the webhook host URL.
+
+        Ensures the webhook host starts with http:// or https:// and
+        removes any trailing slashes for consistent URL construction.
+
+        Args:
+            v: The webhook host value to validate.
+
+        Returns:
+            The normalized webhook host without trailing slash.
+
+        Raises:
+            ValueError: If the webhook host doesn't start with http:// or https://.
+
+        Example:
+            Valid inputs::
+
+                "https://example.com" -> "https://example.com"
+                "https://example.com/" -> "https://example.com"
+        """
         if not v.startswith(("http://", "https://")):
             raise ValueError("webhook_host must start with http:// or https://")
         return v.rstrip("/")
 
     @property
     def webhook_url(self) -> str:
-        """Get the full webhook URL."""
+        """Get the full webhook URL.
+
+        Combines webhook_host and webhook_path into a complete URL.
+
+        Returns:
+            The complete webhook URL (e.g., "https://example.com/webhook").
+
+        Example:
+            Get webhook URL::
+
+                settings = Settings(
+                    webhook_host="https://example.com",
+                    webhook_path="/webhook"
+                )
+                print(settings.webhook_url)  # https://example.com/webhook
+        """
         return f"{self.webhook_host}{self.webhook_path}"
 
 
 @lru_cache
 def get_settings() -> Settings:
-    """Get cached settings instance."""
+    """Get cached settings instance.
+
+    Uses LRU cache to ensure a single settings instance is created
+    and reused throughout the application lifecycle.
+
+    Returns:
+        Cached Settings instance loaded from environment.
+
+    Example:
+        Get settings in application code::
+
+            from telegram_bot.config.settings import get_settings
+
+            settings = get_settings()
+            print(settings.server_port)
+    """
     return Settings()
