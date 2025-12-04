@@ -21,7 +21,8 @@
 | Feature | Description |
 |---------|-------------|
 | **Webhook-based** | Receives Telegram updates via HTTP webhook with automatic retry |
-| **Secure** | IPv4/IPv6 filtering, secret token validation, background processing |
+| **Security Hardened** | Rate limiting, timing-safe auth, security headers, PII protection |
+| **IP Filtering** | IPv4/IPv6 filtering for Telegram server IPs only |
 | **Bot Commands** | Built-in `/start` and `/help` commands with user responses |
 | **Input Classification** | Automatically detects message types (text, photo, document, etc.) |
 | **Enterprise Logging** | Rotating file logs, colored console banner, multi-worker safe |
@@ -287,6 +288,20 @@ cp .env.example .env
 | `LOG_MAX_SIZE_MB` | Max file size before rotation | `10` |
 | `LOG_BACKUP_COUNT` | Number of backup files to keep | `5` |
 
+### Webhook Retry
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `WEBHOOK_MAX_RETRIES` | Max retries on Telegram flood control (1-10) | `3` |
+| `WEBHOOK_RETRY_BUFFER_SECONDS` | Buffer time added to retry_after (0.0-5.0) | `0.5` |
+
+### Rate Limiting
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `RATE_LIMIT_REQUESTS` | Max requests per IP per window (10-10000) | `100` |
+| `RATE_LIMIT_WINDOW_SECONDS` | Rate limit window in seconds (10-3600) | `60` |
+
 ---
 
 ## Bot Commands
@@ -395,6 +410,100 @@ telegram-bot/
 
 ## Security
 
+### Security Architecture
+
+```mermaid
+flowchart TB
+    subgraph Request["📨 Incoming Request"]
+        REQ["HTTPS POST /webhook"]
+    end
+
+    subgraph Layer1["🛡️ Layer 1: Rate Limiting"]
+        RL["Rate Limiter<br/><small>100 req/min per IP</small>"]
+    end
+
+    subgraph Layer2["🛡️ Layer 2: IP Filtering"]
+        IPF["IP Filter<br/><small>Telegram IPs only</small>"]
+    end
+
+    subgraph Layer3["🛡️ Layer 3: Authentication"]
+        ST["Secret Token<br/><small>Timing-safe comparison</small>"]
+    end
+
+    subgraph Layer4["🛡️ Layer 4: Validation"]
+        JV["JSON Validation"]
+        UV["Update Validation"]
+    end
+
+    subgraph Layer5["🛡️ Layer 5: Headers"]
+        SH["Security Headers<br/><small>X-Frame-Options, CSP, etc.</small>"]
+    end
+
+    subgraph Success["✅ Processing"]
+        BG["Background Task"]
+    end
+
+    REQ --> RL
+    RL -->|"❌ 429"| RATE["Too Many Requests"]
+    RL -->|"✅"| IPF
+    IPF -->|"❌ 403"| DENY1["Forbidden"]
+    IPF -->|"✅"| ST
+    ST -->|"❌ 401"| DENY2["Unauthorized"]
+    ST -->|"✅"| JV
+    JV -->|"❌ 400"| BAD1["Invalid JSON"]
+    JV -->|"✅"| UV
+    UV -->|"❌ 400"| BAD2["Invalid Update"]
+    UV -->|"✅"| BG
+    BG --> SH
+    SH --> OK["200 OK"]
+
+    style RL fill:#ff9800,color:#fff
+    style IPF fill:#ff5722,color:#fff
+    style ST fill:#9c27b0,color:#fff
+    style JV fill:#3f51b5,color:#fff
+    style UV fill:#3f51b5,color:#fff
+    style SH fill:#00bcd4,color:#fff
+    style BG fill:#4CAF50,color:#fff
+    style OK fill:#4CAF50,color:#fff
+    style RATE fill:#f44336,color:#fff
+    style DENY1 fill:#f44336,color:#fff
+    style DENY2 fill:#f44336,color:#fff
+    style BAD1 fill:#f44336,color:#fff
+    style BAD2 fill:#f44336,color:#fff
+```
+
+### Security Features Summary
+
+| Feature | Description | Protection Against |
+|---------|-------------|---------------------|
+| **Rate Limiting** | 100 requests/minute per IP | DoS, Brute Force |
+| **IP Filtering** | Telegram IP ranges only | Unauthorized Access |
+| **Timing-Safe Auth** | `hmac.compare_digest()` | Timing Attacks |
+| **JSON Validation** | Proper error handling | Malformed Payloads |
+| **Security Headers** | X-Frame-Options, etc. | Clickjacking, MIME Sniffing |
+| **PII Protection** | Log content truncation | Data Exposure |
+| **Non-root Container** | UID 1000 appuser | Privilege Escalation |
+
+### Rate Limiting
+
+Prevents abuse and DoS attacks with a sliding window algorithm:
+
+```
+┌─────────────────────────────────────────────────────┐
+│  Rate Limit: 100 requests per 60 seconds per IP    │
+├─────────────────────────────────────────────────────┤
+│  Request 1-100  →  ✅ 200 OK                        │
+│  Request 101+   →  ❌ 429 Too Many Requests         │
+│  After window   →  Counter resets                   │
+└─────────────────────────────────────────────────────┘
+```
+
+**Configuration:**
+```bash
+RATE_LIMIT_REQUESTS=100        # Max requests per window
+RATE_LIMIT_WINDOW_SECONDS=60   # Window size in seconds
+```
+
 ### IP Filtering (IPv4 + IPv6)
 
 The webhook only accepts requests from Telegram's official IP ranges:
@@ -448,7 +557,36 @@ flowchart LR
 
 ### Secret Token Validation
 
-Every webhook request validates the `X-Telegram-Bot-Api-Secret-Token` header against `WEBHOOK_SECRET`.
+Every webhook request validates the `X-Telegram-Bot-Api-Secret-Token` header using **timing-safe comparison** (`hmac.compare_digest`) to prevent timing attacks:
+
+```python
+# Secure: Constant-time comparison
+hmac.compare_digest(received_token, expected_secret)
+
+# Insecure: Variable-time comparison (vulnerable to timing attacks)
+received_token == expected_secret  # DON'T USE
+```
+
+### Security Headers
+
+All responses include security headers:
+
+| Header | Value | Purpose |
+|--------|-------|---------|
+| `X-Content-Type-Options` | `nosniff` | Prevent MIME type sniffing |
+| `X-Frame-Options` | `DENY` | Prevent clickjacking |
+| `X-XSS-Protection` | `1; mode=block` | XSS filter |
+| `Referrer-Policy` | `strict-origin-when-cross-origin` | Control referrer info |
+| `Cache-Control` | `no-store` | Prevent response caching |
+
+### PII Protection
+
+Message content is truncated in logs to prevent sensitive data exposure:
+
+```
+Original: "My password is secret123 and my SSN is 123-45-6789"
+Logged:   "My password is secret123 a..."  (30 chars max)
+```
 
 ### Proxy Security Note
 
@@ -457,11 +595,15 @@ Every webhook request validates the `X-Telegram-Bot-Api-Secret-Token` header aga
 
 ### Docker Security
 
-- **Non-root user**: Runs as `appuser` (UID 1000)
-- **Read-only filesystem**: Except for `/app/logs` and `/tmp`
-- **No new privileges**: `security_opt: no-new-privileges`
-- **Resource limits**: CPU and memory constraints
-- **Graceful cleanup**: Guaranteed session close on shutdown
+| Feature | Configuration | Purpose |
+|---------|---------------|---------|
+| **Non-root user** | `appuser` (UID 1000) | Limit container privileges |
+| **Read-only filesystem** | `read_only: true` | Prevent file modifications |
+| **Tmpfs for /tmp** | `tmpfs: /tmp` | Ephemeral temp storage |
+| **No new privileges** | `no-new-privileges:true` | Block privilege escalation |
+| **Resource limits** | 1 CPU, 512MB RAM | Prevent resource exhaustion |
+| **Health checks** | Every 30 seconds | Automatic recovery |
+| **Log rotation** | 10MB × 3 files | Prevent disk exhaustion |
 
 ---
 
