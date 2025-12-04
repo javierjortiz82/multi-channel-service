@@ -22,10 +22,13 @@ Example:
 Attributes:
     START_MESSAGE: Welcome message displayed for /start command.
     HELP_MESSAGE: Help text displayed for /help command.
-    classifier: InputClassifier instance for message type detection.
 """
 
+from collections.abc import Awaitable, Callable
+from typing import Any
+
 from aiogram import F, Router
+from aiogram.exceptions import TelegramAPIError
 from aiogram.filters import Command
 from aiogram.types import Message
 
@@ -34,8 +37,27 @@ from telegram_bot.services.input_classifier import InputClassifier
 
 logger = get_logger("handlers.message")
 
-# Initialize the classifier
-classifier = InputClassifier()
+
+def _create_classifier() -> InputClassifier:
+    """Create a new InputClassifier instance.
+
+    Returns:
+        A new InputClassifier instance.
+    """
+    return InputClassifier()
+
+
+async def _safe_answer(message: Message, text: str) -> None:
+    """Safely send a reply message with error handling.
+
+    Args:
+        message: The message to reply to.
+        text: The text to send.
+    """
+    try:
+        await message.answer(text)
+    except TelegramAPIError as e:
+        logger.warning("Failed to send message to chat %d: %s", message.chat.id, e)
 
 # Welcome message for /start command
 START_MESSAGE = """
@@ -102,170 +124,76 @@ def create_message_router() -> Router:
             dp.include_router(router)
     """
     router = Router(name="message_router")
+    classifier = _create_classifier()
 
-    @router.message(Command("start"))  # type: ignore[misc]
-    async def handle_start(message: Message) -> None:
-        """Handle the /start command.
+    # Define media type filters in priority order
+    # Each tuple: (filter, type_name for logging)
+    media_filters: list[tuple[Any, str]] = [
+        (F.photo, "photo"),
+        (F.document, "document"),
+        (F.video, "video"),
+        (F.audio, "audio"),
+        (F.voice, "voice"),
+        (F.video_note, "video_note"),
+        (F.sticker, "sticker"),
+        (F.animation, "animation"),
+        (F.location, "location"),
+        (F.venue, "venue"),
+        (F.contact, "contact"),
+        (F.poll, "poll"),
+        (F.dice, "dice"),
+    ]
 
-        Sends a welcome message to the user and classifies the input.
+    def create_media_handler(
+        type_name: str,
+    ) -> Callable[[Message], Awaitable[None]]:
+        """Create a handler function for a specific media type.
 
         Args:
-            message: The incoming Telegram message.
+            type_name: The name of the media type for logging.
+
+        Returns:
+            An async handler function.
         """
+
+        async def handler(message: Message) -> None:
+            classifier.classify(message)
+            logger.debug("Processed %s message from user %s", type_name, message.from_user)
+
+        handler.__name__ = f"handle_{type_name}"
+        handler.__doc__ = f"Handle {type_name} messages."
+        return handler
+
+    # Register command handlers
+    @router.message(Command("start"))  # type: ignore[misc]
+    async def handle_start(message: Message) -> None:
+        """Handle the /start command."""
         classifier.classify(message)
         logger.info("User %s started the bot", message.from_user)
-        await message.answer(START_MESSAGE)
+        await _safe_answer(message, START_MESSAGE)
 
     @router.message(Command("help"))  # type: ignore[misc]
     async def handle_help(message: Message) -> None:
-        """Handle the /help command.
-
-        Sends help information to the user with available commands
-        and supported content types.
-
-        Args:
-            message: The incoming Telegram message.
-        """
+        """Handle the /help command."""
         classifier.classify(message)
         logger.info("User %s requested help", message.from_user)
-        await message.answer(HELP_MESSAGE)
+        await _safe_answer(message, HELP_MESSAGE)
 
-    @router.message(F.photo)  # type: ignore[misc]
-    async def handle_photo(message: Message) -> None:
-        """Handle photo messages.
+    # Register media handlers dynamically
+    for filter_obj, type_name in media_filters:
+        handler = create_media_handler(type_name)
+        router.message(filter_obj)(handler)
 
-        Args:
-            message: The incoming Telegram message containing a photo.
-        """
-        classifier.classify(message)
-
-    @router.message(F.document)  # type: ignore[misc]
-    async def handle_document(message: Message) -> None:
-        """Handle document messages.
-
-        Args:
-            message: The incoming Telegram message containing a document.
-        """
-        classifier.classify(message)
-
-    @router.message(F.video)  # type: ignore[misc]
-    async def handle_video(message: Message) -> None:
-        """Handle video messages.
-
-        Args:
-            message: The incoming Telegram message containing a video.
-        """
-        classifier.classify(message)
-
-    @router.message(F.audio)  # type: ignore[misc]
-    async def handle_audio(message: Message) -> None:
-        """Handle audio messages.
-
-        Args:
-            message: The incoming Telegram message containing audio.
-        """
-        classifier.classify(message)
-
-    @router.message(F.voice)  # type: ignore[misc]
-    async def handle_voice(message: Message) -> None:
-        """Handle voice messages.
-
-        Args:
-            message: The incoming Telegram message containing a voice recording.
-        """
-        classifier.classify(message)
-
-    @router.message(F.video_note)  # type: ignore[misc]
-    async def handle_video_note(message: Message) -> None:
-        """Handle video note (round video) messages.
-
-        Args:
-            message: The incoming Telegram message containing a video note.
-        """
-        classifier.classify(message)
-
-    @router.message(F.sticker)  # type: ignore[misc]
-    async def handle_sticker(message: Message) -> None:
-        """Handle sticker messages.
-
-        Args:
-            message: The incoming Telegram message containing a sticker.
-        """
-        classifier.classify(message)
-
-    @router.message(F.animation)  # type: ignore[misc]
-    async def handle_animation(message: Message) -> None:
-        """Handle animation (GIF) messages.
-
-        Args:
-            message: The incoming Telegram message containing an animation.
-        """
-        classifier.classify(message)
-
-    @router.message(F.location)  # type: ignore[misc]
-    async def handle_location(message: Message) -> None:
-        """Handle location messages.
-
-        Args:
-            message: The incoming Telegram message containing location data.
-        """
-        classifier.classify(message)
-
-    @router.message(F.venue)  # type: ignore[misc]
-    async def handle_venue(message: Message) -> None:
-        """Handle venue messages.
-
-        Args:
-            message: The incoming Telegram message containing venue data.
-        """
-        classifier.classify(message)
-
-    @router.message(F.contact)  # type: ignore[misc]
-    async def handle_contact(message: Message) -> None:
-        """Handle contact messages.
-
-        Args:
-            message: The incoming Telegram message containing contact data.
-        """
-        classifier.classify(message)
-
-    @router.message(F.poll)  # type: ignore[misc]
-    async def handle_poll(message: Message) -> None:
-        """Handle poll messages.
-
-        Args:
-            message: The incoming Telegram message containing a poll.
-        """
-        classifier.classify(message)
-
-    @router.message(F.dice)  # type: ignore[misc]
-    async def handle_dice(message: Message) -> None:
-        """Handle dice messages.
-
-        Args:
-            message: The incoming Telegram message containing a dice roll.
-        """
-        classifier.classify(message)
-
+    # Register text handler
     @router.message(F.text)  # type: ignore[misc]
     async def handle_text(message: Message) -> None:
-        """Handle plain text messages.
-
-        Args:
-            message: The incoming Telegram message containing text.
-        """
+        """Handle plain text messages."""
         classifier.classify(message)
 
+    # Register fallback handler
     @router.message()  # type: ignore[misc]
     async def handle_unknown(message: Message) -> None:
-        """Handle any other message type (fallback handler).
-
-        This handler catches all messages that don't match any other handler.
-        Logs a warning for debugging purposes.
-
-        Args:
-            message: The incoming Telegram message of unknown type.
-        """
+        """Handle any other message type (fallback handler)."""
         classifier.classify(message)
         logger.warning("Received unknown message type from %s", message.from_user)
 

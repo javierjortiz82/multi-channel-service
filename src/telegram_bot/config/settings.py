@@ -203,6 +203,34 @@ class Settings(BaseSettings):
         description="Number of backup log files to keep",
     )
 
+    # Webhook Retry Configuration
+    webhook_max_retries: int = Field(
+        default=3,
+        ge=1,
+        le=10,
+        description="Maximum retries for webhook setup on flood control",
+    )
+    webhook_retry_buffer_seconds: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=5.0,
+        description="Buffer time in seconds added to Telegram's retry_after",
+    )
+
+    # Rate Limiting Configuration
+    rate_limit_requests: int = Field(
+        default=100,
+        ge=10,
+        le=10000,
+        description="Maximum requests per IP per rate limit window",
+    )
+    rate_limit_window_seconds: int = Field(
+        default=60,
+        ge=10,
+        le=3600,
+        description="Rate limit window in seconds",
+    )
+
     @field_validator("webhook_host")
     @classmethod
     def validate_webhook_host(cls, v: str) -> str:

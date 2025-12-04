@@ -92,6 +92,7 @@ class InputClassifier:
 
     Attributes:
         _ATTRIBUTE_TYPE_MAP: Ordered mapping of message attributes to InputType.
+        _MAX_LOG_CONTENT_LENGTH: Maximum characters to log from message content.
 
     Example:
         Classify a message::
@@ -105,6 +106,9 @@ class InputClassifier:
             elif input_type == InputType.COMMAND:
                 print(f"User sent command: {message.text}")
     """
+
+    # Maximum characters to log from message content (to avoid PII exposure)
+    _MAX_LOG_CONTENT_LENGTH: int = 30
 
     # Mapping of message attributes to input types (order matters for priority)
     _ATTRIBUTE_TYPE_MAP: list[tuple[str, InputType]] = [
@@ -179,6 +183,19 @@ class InputClassifier:
             return InputType.COMMAND
         return InputType.TEXT
 
+    def _truncate_content(self, content: str) -> str:
+        """Truncate content to prevent PII exposure in logs.
+
+        Args:
+            content: The content to truncate.
+
+        Returns:
+            Truncated content with ellipsis if needed.
+        """
+        if len(content) <= self._MAX_LOG_CONTENT_LENGTH:
+            return content
+        return content[: self._MAX_LOG_CONTENT_LENGTH] + "..."
+
     def _log_classification(self, message: Message, input_type: InputType) -> None:
         """Log the classification result.
 
@@ -193,9 +210,10 @@ class InputClassifier:
             user_info,
             message.chat.id,
         )
-        # Log to console with content for text messages
+        # Log to console with truncated content for text messages (PII protection)
         if input_type == InputType.TEXT and message.text:
-            logger.info("[INPUT TYPE] %s | content: %s", input_type.value, message.text)
+            truncated = self._truncate_content(message.text)
+            logger.info("[INPUT TYPE] %s | content: %s", input_type.value, truncated)
         else:
             logger.info("[INPUT TYPE] %s", input_type.value)
 

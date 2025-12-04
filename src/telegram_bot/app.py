@@ -1,18 +1,23 @@
 """FastAPI application with Telegram webhook endpoint."""
 
 import asyncio
+import hmac
+import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from json import JSONDecodeError
 from typing import Any
 from weakref import WeakSet
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-from aiogram.exceptions import TelegramRetryAfter
+from aiogram.exceptions import TelegramAPIError, TelegramRetryAfter
 from aiogram.types import Update
 from fastapi import FastAPI, Header, HTTPException, Request, status
 from fastapi.responses import JSONResponse
+from pydantic import ValidationError
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from telegram_bot.bot.handlers import create_message_router
 from telegram_bot.config.settings import Settings, get_settings
@@ -21,11 +26,98 @@ from telegram_bot.services.webhook_service import validate_telegram_request
 
 logger = get_logger("app")
 
-# Maximum number of retries for webhook setup
-MAX_WEBHOOK_RETRIES = 3
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """Middleware to add security headers to all responses."""
+
+    async def dispatch(self, request: Request, call_next: Any) -> Any:
+        """Add security headers to response.
+
+        Args:
+            request: The incoming request.
+            call_next: The next middleware/handler.
+
+        Returns:
+            Response with security headers added.
+        """
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-XSS-Protection"] = "1; mode=block"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+
+class RateLimiter:
+    """Simple in-memory rate limiter for webhook endpoint.
+
+    Implements a sliding window rate limiting algorithm.
+    """
+
+    def __init__(self, max_requests: int = 100, window_seconds: int = 60) -> None:
+        """Initialize rate limiter.
+
+        Args:
+            max_requests: Maximum requests allowed per window.
+            window_seconds: Time window in seconds.
+        """
+        self._max_requests = max_requests
+        self._window_seconds = window_seconds
+        self._requests: dict[str, list[float]] = {}
+
+    def is_allowed(self, client_ip: str) -> bool:
+        """Check if request from client IP is allowed.
+
+        Args:
+            client_ip: The client's IP address.
+
+        Returns:
+            True if request is allowed, False if rate limited.
+        """
+        now = time.time()
+        window_start = now - self._window_seconds
+
+        # Clean old entries for this IP
+        if client_ip in self._requests:
+            self._requests[client_ip] = [
+                t for t in self._requests[client_ip] if t > window_start
+            ]
+        else:
+            self._requests[client_ip] = []
+
+        # Check if under limit
+        if len(self._requests[client_ip]) >= self._max_requests:
+            return False
+
+        # Record this request
+        self._requests[client_ip].append(now)
+        return True
+
 
 # Store background tasks to prevent garbage collection
 _background_tasks: WeakSet[asyncio.Task[None]] = WeakSet()
+
+# Rate limiter instance (initialized lazily with settings)
+_rate_limiter: RateLimiter | None = None
+
+
+def _get_rate_limiter(settings: Settings) -> RateLimiter:
+    """Get or create the rate limiter instance.
+
+    Args:
+        settings: Application settings.
+
+    Returns:
+        The rate limiter instance.
+    """
+    global _rate_limiter
+    if _rate_limiter is None:
+        _rate_limiter = RateLimiter(
+            max_requests=settings.rate_limit_requests,
+            window_seconds=settings.rate_limit_window_seconds,
+        )
+    return _rate_limiter
 
 
 async def set_webhook_with_retry(bot: Bot, settings: Settings) -> None:
@@ -44,8 +136,10 @@ async def set_webhook_with_retry(bot: Bot, settings: Settings) -> None:
         settings: Application settings.
     """
     webhook_url = settings.webhook_url
+    max_retries = settings.webhook_max_retries
+    retry_buffer = settings.webhook_retry_buffer_seconds
 
-    for attempt in range(MAX_WEBHOOK_RETRIES):
+    for attempt in range(max_retries):
         try:
             await bot.set_webhook(
                 url=webhook_url,
@@ -56,11 +150,11 @@ async def set_webhook_with_retry(bot: Bot, settings: Settings) -> None:
             logger.info("Webhook configured successfully")
             return
         except TelegramRetryAfter as e:
-            wait_time = e.retry_after + 0.5  # Add buffer
+            wait_time = e.retry_after + retry_buffer
             logger.warning(
                 "Flood control on SetWebhook, attempt %d/%d. Waiting %.1f seconds...",
                 attempt + 1,
-                MAX_WEBHOOK_RETRIES,
+                max_retries,
                 wait_time,
             )
             await asyncio.sleep(wait_time)
@@ -132,8 +226,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     logger.info("Removing webhook...")
     try:
         await bot.delete_webhook()
-    except Exception:
-        logger.exception("Error removing webhook")
+    except TelegramAPIError as e:
+        logger.exception("Telegram API error removing webhook: %s", e)
+    except OSError as e:
+        logger.exception("Network error removing webhook: %s", e)
     finally:
         await bot.session.close()
         logger.info("Bot session closed")
@@ -161,6 +257,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         lifespan=lifespan,
     )
 
+    # Add security headers middleware
+    app.add_middleware(SecurityHeadersMiddleware)
+
     # Store bot and dispatcher in app state
     app.state.bot = create_bot(settings)
     app.state.dp = create_dispatcher()
@@ -186,8 +285,10 @@ async def process_update_background(dp: Dispatcher, bot: Bot, update: Update) ->
     try:
         await dp.feed_update(bot=bot, update=update)
         logger.debug("Update %d processed successfully", update.update_id)
-    except Exception:
-        logger.exception("Error processing update %d", update.update_id)
+    except TelegramAPIError as e:
+        logger.exception("Telegram API error processing update %d: %s", update.update_id, e)
+    except OSError as e:
+        logger.exception("Network error processing update %d: %s", update.update_id, e)
 
 
 def register_routes(app: FastAPI, settings: Settings) -> None:
@@ -206,8 +307,9 @@ def register_routes(app: FastAPI, settings: Settings) -> None:
         """Handle incoming Telegram webhook updates.
 
         Security features:
+        - Rate limiting: Prevents abuse with per-IP request limits
         - IP filtering: Only accepts requests from Telegram server IPs
-        - Secret token validation: Verifies X-Telegram-Bot-Api-Secret-Token header
+        - Secret token validation: Timing-safe verification of secret token
         - Background processing: Responds immediately, processes asynchronously
 
         Args:
@@ -220,21 +322,47 @@ def register_routes(app: FastAPI, settings: Settings) -> None:
         Raises:
             HTTPException: If validation fails.
         """
+        # 0. Rate limiting check
+        rate_limiter = _get_rate_limiter(settings)
+        client_ip = request.client.host if request.client else "unknown"
+        if not rate_limiter.is_allowed(client_ip):
+            logger.warning("Rate limit exceeded for IP: %s", client_ip)
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Too many requests",
+            )
+
         # 1. Validate IP address (if enabled)
         await validate_telegram_request(request, settings.webhook_ip_filter_enabled)
 
-        # 2. Validate secret token
+        # 2. Validate secret token (timing-safe comparison)
         expected_secret = settings.webhook_secret.get_secret_value()
-        if x_telegram_bot_api_secret_token != expected_secret:
+        token_to_check = x_telegram_bot_api_secret_token or ""
+        if not hmac.compare_digest(token_to_check, expected_secret):
             logger.warning("Invalid webhook secret token received")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid secret token",
+                detail="Unauthorized",
             )
 
-        # 3. Parse update
-        data: dict[str, Any] = await request.json()
-        update = Update.model_validate(data, context={"bot": app.state.bot})
+        # 3. Parse update with error handling
+        try:
+            data: dict[str, Any] = await request.json()
+        except JSONDecodeError as err:
+            logger.warning("Invalid JSON payload received")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid JSON",
+            ) from err
+
+        try:
+            update = Update.model_validate(data, context={"bot": app.state.bot})
+        except ValidationError as err:
+            logger.warning("Invalid Telegram update format: %s", err.error_count())
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid update format",
+            ) from err
 
         # 4. Process in background (respond immediately to Telegram)
         task = asyncio.create_task(
