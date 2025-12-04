@@ -1,2 +1,3 @@
 - Bot Funcional
 - DocString
+- Security Hardening
