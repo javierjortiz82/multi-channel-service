@@ -39,4 +39,5 @@ services:
     tmpfs:
       - /tmp:size=128m,mode=1777
     volumes:
-      - ./logs:/app/logs
+      - ${LOG_PATH:-./logs}:/app/logs:rw
+    user: "1000:1000"

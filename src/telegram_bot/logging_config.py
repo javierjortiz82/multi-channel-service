@@ -298,35 +298,52 @@ def setup_logging(
     # File Handlers (if enabled and settings provided)
     if settings and settings.log_to_file:
         _LOG_DIR = Path(settings.log_dir)
-        _LOG_DIR.mkdir(parents=True, exist_ok=True)
+        try:
+            _LOG_DIR.mkdir(parents=True, exist_ok=True)
 
-        # Main log file with rotation
-        log_file = _LOG_DIR / "telegram_bot.log"
-        file_handler = logging.handlers.RotatingFileHandler(
-            log_file,
-            maxBytes=settings.log_max_size_mb * 1024 * 1024,
-            backupCount=settings.log_backup_count,
-            encoding="utf-8",
-        )
-        file_handler.setLevel(logging.DEBUG)  # Capture all levels to file
-        file_formatter = logging.Formatter(_LOG_FORMAT_DETAILED, datefmt=_DATE_FORMAT)
-        file_handler.setFormatter(file_formatter)
-        root_logger.addHandler(file_handler)
+            # Main log file with rotation
+            log_file = _LOG_DIR / "telegram_bot.log"
+            file_handler = logging.handlers.RotatingFileHandler(
+                log_file,
+                maxBytes=settings.log_max_size_mb * 1024 * 1024,
+                backupCount=settings.log_backup_count,
+                encoding="utf-8",
+            )
+            file_handler.setLevel(logging.DEBUG)  # Capture all levels to file
+            file_formatter = logging.Formatter(
+                _LOG_FORMAT_DETAILED, datefmt=_DATE_FORMAT
+            )
+            file_handler.setFormatter(file_formatter)
+            root_logger.addHandler(file_handler)
 
-        # Error log file (separate file for errors only)
-        error_log_file = _LOG_DIR / "telegram_bot.error.log"
-        error_handler = logging.handlers.RotatingFileHandler(
-            error_log_file,
-            maxBytes=settings.log_max_size_mb
-            * 1024
-            * 1024
-            // 2,  # Half size for errors
-            backupCount=settings.log_backup_count,
-            encoding="utf-8",
-        )
-        error_handler.setLevel(logging.ERROR)
-        error_handler.setFormatter(file_formatter)
-        root_logger.addHandler(error_handler)
+            # Error log file (separate file for errors only)
+            error_log_file = _LOG_DIR / "telegram_bot.error.log"
+            error_handler = logging.handlers.RotatingFileHandler(
+                error_log_file,
+                maxBytes=settings.log_max_size_mb
+                * 1024
+                * 1024
+                // 2,  # Half size for errors
+                backupCount=settings.log_backup_count,
+                encoding="utf-8",
+            )
+            error_handler.setLevel(logging.ERROR)
+            error_handler.setFormatter(file_formatter)
+            root_logger.addHandler(error_handler)
+        except PermissionError as e:
+            # Log to console only if file logging is not available
+            console_handler.setLevel(logging.DEBUG)
+            root_logger.warning(
+                "File logging disabled - permission denied: %s. "
+                "Ensure logs directory exists with correct permissions (UID 1000).",
+                e,
+            )
+        except OSError as e:
+            console_handler.setLevel(logging.DEBUG)
+            root_logger.warning(
+                "File logging disabled - OS error: %s. Falling back to console only.",
+                e,
+            )
 
     # Reduce noise from third-party libraries
     logging.getLogger("aiogram").setLevel(logging.WARNING)
