@@ -61,14 +61,15 @@ def is_telegram_ip(ip_address: str) -> bool:
         ip = ipaddress.IPv4Address(ip_address)
         return any(ip in network for network in TELEGRAM_IP_RANGES_V4)
     except ipaddress.AddressValueError:
-        pass
+        # Not IPv4, try IPv6 next
+        logger.debug("IP %s is not IPv4, trying IPv6", ip_address)
 
     try:
         # Try IPv6
         ip_v6 = ipaddress.IPv6Address(ip_address)
         return any(ip_v6 in network for network in TELEGRAM_IP_RANGES_V6)
     except ipaddress.AddressValueError:
-        logger.warning("Invalid IP address format: %s", ip_address)
+        logger.warning("Invalid IP address format (not IPv4 or IPv6): %s", ip_address)
         return False
 
 

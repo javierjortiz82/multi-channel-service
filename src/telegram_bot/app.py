@@ -7,7 +7,6 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from json import JSONDecodeError
 from typing import Any
-from weakref import WeakSet
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
@@ -28,7 +27,7 @@ logger = get_logger("app")
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
-    """Middleware to add security headers to all responses."""
+    """Middleware to add comprehensive security headers to all responses."""
 
     async def dispatch(self, request: Request, call_next: Any) -> Any:
         """Add security headers to response.
@@ -41,18 +40,31 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
             Response with security headers added.
         """
         response = await call_next(request)
+        # Basic security headers
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["X-XSS-Protection"] = "1; mode=block"
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
         response.headers["Cache-Control"] = "no-store"
+        # Additional security headers
+        response.headers["Strict-Transport-Security"] = (
+            "max-age=31536000; includeSubDomains; preload"
+        )
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'none'; frame-ancestors 'none'"
+        )
+        response.headers["X-Permitted-Cross-Domain-Policies"] = "none"
+        response.headers["Permissions-Policy"] = (
+            "geolocation=(), microphone=(), camera=()"
+        )
         return response
 
 
 class RateLimiter:
-    """Simple in-memory rate limiter for webhook endpoint.
+    """Thread-safe in-memory rate limiter for webhook endpoint.
 
-    Implements a sliding window rate limiting algorithm.
+    Implements a sliding window rate limiting algorithm with async lock
+    to prevent race conditions in concurrent environments.
     """
 
     def __init__(self, max_requests: int = 100, window_seconds: int = 60) -> None:
@@ -65,9 +77,12 @@ class RateLimiter:
         self._max_requests = max_requests
         self._window_seconds = window_seconds
         self._requests: dict[str, list[float]] = {}
+        self._lock = asyncio.Lock()
+        self._cleanup_counter = 0
+        self._cleanup_interval = 100  # Cleanup every 100 requests
 
-    def is_allowed(self, client_ip: str) -> bool:
-        """Check if request from client IP is allowed.
+    async def is_allowed(self, client_ip: str) -> bool:
+        """Check if request from client IP is allowed (async, thread-safe).
 
         Args:
             client_ip: The client's IP address.
@@ -78,32 +93,56 @@ class RateLimiter:
         now = time.time()
         window_start = now - self._window_seconds
 
-        # Clean old entries for this IP
-        if client_ip in self._requests:
-            self._requests[client_ip] = [
-                t for t in self._requests[client_ip] if t > window_start
-            ]
-        else:
-            self._requests[client_ip] = []
+        async with self._lock:
+            # Periodic cleanup of old IPs to prevent memory leak
+            self._cleanup_counter += 1
+            if self._cleanup_counter >= self._cleanup_interval:
+                self._cleanup_old_entries(window_start)
+                self._cleanup_counter = 0
 
-        # Check if under limit
-        if len(self._requests[client_ip]) >= self._max_requests:
-            return False
+            # Clean old entries for this IP
+            if client_ip in self._requests:
+                self._requests[client_ip] = [
+                    t for t in self._requests[client_ip] if t > window_start
+                ]
+            else:
+                self._requests[client_ip] = []
 
-        # Record this request
-        self._requests[client_ip].append(now)
-        return True
+            # Check if under limit
+            if len(self._requests[client_ip]) >= self._max_requests:
+                return False
+
+            # Record this request
+            self._requests[client_ip].append(now)
+            return True
+
+    def _cleanup_old_entries(self, window_start: float) -> None:
+        """Remove IPs with no recent requests to prevent memory leak.
+
+        Args:
+            window_start: Timestamp marking the start of the current window.
+        """
+        empty_ips = [
+            ip for ip, timestamps in self._requests.items()
+            if not timestamps or all(t <= window_start for t in timestamps)
+        ]
+        for ip in empty_ips:
+            del self._requests[ip]
 
 
-# Store background tasks to prevent garbage collection
-_background_tasks: WeakSet[asyncio.Task[None]] = WeakSet()
+# Store background tasks with strong references to prevent garbage collection
+_background_tasks: set[asyncio.Task[None]] = set()
 
 # Rate limiter instance (initialized lazily with settings)
 _rate_limiter: RateLimiter | None = None
+_rate_limiter_lock = asyncio.Lock()
 
 
-def _get_rate_limiter(settings: Settings) -> RateLimiter:
-    """Get or create the rate limiter instance.
+async def _get_rate_limiter(settings: Settings) -> RateLimiter:
+    """Get or create the rate limiter instance (async, thread-safe).
+
+    Uses double-checked locking pattern to ensure thread-safe initialization
+    while minimizing lock contention after initialization.
 
     Args:
         settings: Application settings.
@@ -113,10 +152,13 @@ def _get_rate_limiter(settings: Settings) -> RateLimiter:
     """
     global _rate_limiter
     if _rate_limiter is None:
-        _rate_limiter = RateLimiter(
-            max_requests=settings.rate_limit_requests,
-            window_seconds=settings.rate_limit_window_seconds,
-        )
+        async with _rate_limiter_lock:
+            # Double-check after acquiring lock
+            if _rate_limiter is None:
+                _rate_limiter = RateLimiter(
+                    max_requests=settings.rate_limit_requests,
+                    window_seconds=settings.rate_limit_window_seconds,
+                )
     return _rate_limiter
 
 
@@ -306,11 +348,11 @@ def register_routes(app: FastAPI, settings: Settings) -> None:
     ) -> JSONResponse:
         """Handle incoming Telegram webhook updates.
 
-        Security features:
-        - Rate limiting: Prevents abuse with per-IP request limits
-        - IP filtering: Only accepts requests from Telegram server IPs
-        - Secret token validation: Timing-safe verification of secret token
-        - Background processing: Responds immediately, processes asynchronously
+        Security features (in order of execution):
+        1. IP filtering: Only accepts requests from Telegram server IPs
+        2. Secret token validation: Timing-safe verification of secret token
+        3. Rate limiting: Prevents abuse with per-IP request limits (after auth)
+        4. Background processing: Responds immediately, processes asynchronously
 
         Args:
             request: The incoming HTTP request.
@@ -322,17 +364,9 @@ def register_routes(app: FastAPI, settings: Settings) -> None:
         Raises:
             HTTPException: If validation fails.
         """
-        # 0. Rate limiting check
-        rate_limiter = _get_rate_limiter(settings)
         client_ip = request.client.host if request.client else "unknown"
-        if not rate_limiter.is_allowed(client_ip):
-            logger.warning("Rate limit exceeded for IP: %s", client_ip)
-            raise HTTPException(
-                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail="Too many requests",
-            )
 
-        # 1. Validate IP address (if enabled)
+        # 1. Validate IP address first (if enabled) - reject non-Telegram IPs early
         await validate_telegram_request(request, settings.webhook_ip_filter_enabled)
 
         # 2. Validate secret token (timing-safe comparison)
@@ -342,10 +376,19 @@ def register_routes(app: FastAPI, settings: Settings) -> None:
             logger.warning("Invalid webhook secret token received")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Unauthorized",
+                detail="Invalid secret token",
             )
 
-        # 3. Parse update with error handling
+        # 3. Rate limiting check (only after authentication to prevent DoS)
+        rate_limiter = await _get_rate_limiter(settings)
+        if not await rate_limiter.is_allowed(client_ip):
+            logger.warning("Rate limit exceeded for IP: %s", client_ip)
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Too many requests",
+            )
+
+        # 4. Parse update with error handling
         try:
             data: dict[str, Any] = await request.json()
         except JSONDecodeError as err:
@@ -364,13 +407,15 @@ def register_routes(app: FastAPI, settings: Settings) -> None:
                 detail="Invalid update format",
             ) from err
 
-        # 4. Process in background (respond immediately to Telegram)
+        # 5. Process in background (respond immediately to Telegram)
         task = asyncio.create_task(
             process_update_background(app.state.dp, app.state.bot, update)
         )
         _background_tasks.add(task)
+        # Add callback to remove task from set when done (prevents memory leak)
+        task.add_done_callback(_background_tasks.discard)
 
-        # 5. Return immediately (Telegram expects fast response)
+        # 6. Return immediately (Telegram expects fast response)
         return JSONResponse(content={"status": "ok"}, status_code=status.HTTP_200_OK)
 
     @app.get("/health")

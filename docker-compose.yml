@@ -10,6 +10,8 @@ services:
       - .env
     environment:
       - PYTHONUNBUFFERED=1
+      - LOG_TO_FILE=true
+      - LOG_DIR=/app/logs
     ports:
       - "${SERVER_PORT:-8002}:${SERVER_PORT:-8002}"
     healthcheck:
@@ -21,11 +23,11 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "1.0"
-          memory: 512M
+          cpus: "2.0"
+          memory: 1024M
         reservations:
-          cpus: "0.25"
-          memory: 128M
+          cpus: "0.5"
+          memory: 256M
     logging:
       driver: "json-file"
       options:
@@ -35,6 +37,6 @@ services:
       - no-new-privileges:true
     read_only: true
     tmpfs:
-      - /tmp
+      - /tmp:size=128m,mode=1777
     volumes:
       - ./logs:/app/logs

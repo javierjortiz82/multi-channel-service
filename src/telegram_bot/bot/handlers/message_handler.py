@@ -165,14 +165,14 @@ def create_message_router() -> Router:
         return handler
 
     # Register command handlers
-    @router.message(Command("start"))  # type: ignore[misc]
+    @router.message(Command("start"))
     async def handle_start(message: Message) -> None:
         """Handle the /start command."""
         classifier.classify(message)
         logger.info("User %s started the bot", message.from_user)
         await _safe_answer(message, START_MESSAGE)
 
-    @router.message(Command("help"))  # type: ignore[misc]
+    @router.message(Command("help"))
     async def handle_help(message: Message) -> None:
         """Handle the /help command."""
         classifier.classify(message)
@@ -185,13 +185,13 @@ def create_message_router() -> Router:
         router.message(filter_obj)(handler)
 
     # Register text handler
-    @router.message(F.text)  # type: ignore[misc]
+    @router.message(F.text)
     async def handle_text(message: Message) -> None:
         """Handle plain text messages."""
         classifier.classify(message)
 
     # Register fallback handler
-    @router.message()  # type: ignore[misc]
+    @router.message()
     async def handle_unknown(message: Message) -> None:
         """Handle any other message type (fallback handler)."""
         classifier.classify(message)

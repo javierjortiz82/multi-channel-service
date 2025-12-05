@@ -72,9 +72,9 @@ ENV PYTHONUNBUFFERED=1 \
 # Expose port
 EXPOSE 8002
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:${SERVER_PORT}/health')" || exit 1
+# Health check (uses default port 8002, override in docker-compose if needed)
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8002/health')" || exit 1
 
 # Run with uvicorn and workers for concurrency
 CMD ["sh", "-c", "uvicorn telegram_bot.app:create_app --factory --host ${SERVER_HOST} --port ${SERVER_PORT} --workers ${WORKERS}"]

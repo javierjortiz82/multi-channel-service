@@ -16,6 +16,8 @@ Attributes:
     get_settings: Factory function to get cached settings instance.
 """
 
+import ipaddress
+import re
 from functools import lru_cache
 from typing import Literal
 
@@ -164,11 +166,11 @@ class Settings(BaseSettings):
         le=300,
         description="Seconds to keep idle connections open (keep-alive timeout)",
     )
-    timeout_graceful_shutdown: int | None = Field(
+    timeout_graceful_shutdown: int = Field(
         default=30,
         ge=1,
         le=300,
-        description="Seconds to wait for graceful shutdown (None=wait forever)",
+        description="Seconds to wait for graceful shutdown",
     )
 
     # Performance Configuration
@@ -231,13 +233,44 @@ class Settings(BaseSettings):
         description="Rate limit window in seconds",
     )
 
+    @field_validator("webhook_path")
+    @classmethod
+    def validate_webhook_path(cls, v: str) -> str:
+        """Validate and normalize the webhook path.
+
+        Ensures the webhook path starts with '/' and contains only valid characters.
+
+        Args:
+            v: The webhook path value to validate.
+
+        Returns:
+            The normalized webhook path.
+
+        Raises:
+            ValueError: If the webhook path is invalid.
+        """
+        if not v:
+            raise ValueError("webhook_path cannot be empty")
+        if not v.startswith("/"):
+            raise ValueError("webhook_path must start with '/'")
+        # Check for valid URL path characters
+        if not re.match(r'^/[a-zA-Z0-9_\-/]*$', v):
+            raise ValueError(
+                "webhook_path must contain only alphanumeric characters, "
+                "underscores, hyphens, and forward slashes"
+            )
+        # Remove double slashes
+        while "//" in v:
+            v = v.replace("//", "/")
+        return v
+
     @field_validator("webhook_host")
     @classmethod
     def validate_webhook_host(cls, v: str) -> str:
         """Validate and normalize the webhook host URL.
 
-        Ensures the webhook host starts with http:// or https:// and
-        removes any trailing slashes for consistent URL construction.
+        Ensures the webhook host starts with http:// or https://,
+        contains a valid hostname, and removes any trailing slashes.
 
         Args:
             v: The webhook host value to validate.
@@ -246,7 +279,7 @@ class Settings(BaseSettings):
             The normalized webhook host without trailing slash.
 
         Raises:
-            ValueError: If the webhook host doesn't start with http:// or https://.
+            ValueError: If the webhook host is invalid.
 
         Example:
             Valid inputs::
@@ -256,7 +289,86 @@ class Settings(BaseSettings):
         """
         if not v.startswith(("http://", "https://")):
             raise ValueError("webhook_host must start with http:// or https://")
-        return v.rstrip("/")
+
+        # Extract hostname part and validate it exists
+        v = v.rstrip("/")
+        protocol_end = v.find("://") + 3
+        host_part = v[protocol_end:]
+
+        if not host_part:
+            raise ValueError("webhook_host must include a hostname after the protocol")
+
+        # Basic hostname validation (must have at least one character)
+        hostname = host_part.split(":")[0].split("/")[0]
+        if not hostname or hostname == "":
+            raise ValueError("webhook_host must include a valid hostname")
+
+        return v
+
+    @field_validator("server_host")
+    @classmethod
+    def validate_server_host(cls, v: str) -> str:
+        """Validate the server host.
+
+        Ensures the server host is a valid IP address or hostname.
+
+        Args:
+            v: The server host value to validate.
+
+        Returns:
+            The validated server host.
+
+        Raises:
+            ValueError: If the server host is invalid.
+        """
+        if not v:
+            raise ValueError("server_host cannot be empty")
+
+        # Check if it's a valid IP address
+        try:
+            ipaddress.ip_address(v)
+            return v
+        except ValueError:
+            pass
+
+        # Check if it's a valid hostname
+        hostname_pattern = r'^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*$'
+        if not re.match(hostname_pattern, v):
+            raise ValueError(
+                f"server_host '{v}' is not a valid IP address or hostname"
+            )
+
+        return v
+
+    @field_validator("log_dir")
+    @classmethod
+    def validate_log_dir(cls, v: str) -> str:
+        """Validate the log directory path.
+
+        Ensures the log directory path is valid and doesn't contain
+        null characters or other invalid path components.
+
+        Args:
+            v: The log directory path to validate.
+
+        Returns:
+            The validated log directory path.
+
+        Raises:
+            ValueError: If the log directory path is invalid.
+        """
+        if not v:
+            raise ValueError("log_dir cannot be empty")
+
+        # Check for null characters (security issue)
+        if '\x00' in v:
+            raise ValueError("log_dir cannot contain null characters")
+
+        # Check for overly long paths
+        if len(v) > 4096:
+            raise ValueError("log_dir path is too long (max 4096 characters)")
+
+        return v
 
     @property
     def webhook_url(self) -> str:

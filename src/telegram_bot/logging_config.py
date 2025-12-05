@@ -87,16 +87,25 @@ def _try_acquire_banner_lock() -> bool:
     Returns:
         True if this process should print the banner, False otherwise.
     """
+    fd = None
     try:
         # O_CREAT | O_EXCL ensures atomic creation - fails if file exists
         fd = os.open(_BANNER_FLAG_FILE, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
         os.write(fd, str(os.getpid()).encode())
-        os.close(fd)
         return True
     except FileExistsError:
         return False
-    except OSError:
+    except OSError as e:
+        # Log unexpected errors for debugging
+        import logging
+        logging.getLogger(__name__).debug("Banner lock acquisition failed: %s", e)
         return False
+    finally:
+        # Always close the file descriptor if it was opened
+        if fd is not None:
+            import contextlib
+            with contextlib.suppress(OSError):
+                os.close(fd)
 
 
 def _cleanup_banner_flag() -> None:
@@ -104,8 +113,10 @@ def _cleanup_banner_flag() -> None:
     try:
         if _BANNER_FLAG_PATH.exists():
             _BANNER_FLAG_PATH.unlink()
-    except OSError:
-        pass
+    except OSError as e:
+        # Log cleanup failures for debugging (non-critical)
+        import logging
+        logging.getLogger(__name__).debug("Banner flag cleanup failed: %s", e)
 
 
 def _mask_secret(secret: str) -> str:
