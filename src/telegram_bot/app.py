@@ -123,7 +123,8 @@ class RateLimiter:
             window_start: Timestamp marking the start of the current window.
         """
         empty_ips = [
-            ip for ip, timestamps in self._requests.items()
+            ip
+            for ip, timestamps in self._requests.items()
             if not timestamps or all(t <= window_start for t in timestamps)
         ]
         for ip in empty_ips:
@@ -328,7 +329,9 @@ async def process_update_background(dp: Dispatcher, bot: Bot, update: Update) ->
         await dp.feed_update(bot=bot, update=update)
         logger.debug("Update %d processed successfully", update.update_id)
     except TelegramAPIError as e:
-        logger.exception("Telegram API error processing update %d: %s", update.update_id, e)
+        logger.exception(
+            "Telegram API error processing update %d: %s", update.update_id, e
+        )
     except OSError as e:
         logger.exception("Network error processing update %d: %s", update.update_id, e)
 

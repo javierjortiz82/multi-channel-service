@@ -1,0 +1,9 @@
+# GCP Setup Output - Sun Dec 28 22:17:01 CST 2025
+GCP_PROJECT_ID=gen-lang-client-0329024102
+GCP_PROJECT_NUMBER=69054835734
+GCP_REGION=us-central1
+GCP_SA_EMAIL=orchestrator-sa@gen-lang-client-0329024102.iam.gserviceaccount.com
+
+SERVICE_NAME=multi-channel-service
+REPO_NAME=multi-channel-repo
+IMAGE_URL=us-central1-docker.pkg.dev/gen-lang-client-0329024102/multi-channel-repo/multi-channel-service

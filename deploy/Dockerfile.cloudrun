@@ -1,0 +1,107 @@
+# =============================================================================
+# Multi-Channel Service - Production Dockerfile for Google Cloud Run
+# =============================================================================
+# Multi-stage build optimized for Cloud Run with UV package manager
+# - Stage 1: Builder with UV for fast dependency installation
+# - Stage 2: Minimal production runtime
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Stage 1: Builder
+# -----------------------------------------------------------------------------
+FROM python:3.12-slim-bookworm AS builder
+
+# Install UV package manager (10x faster than pip)
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
+# Set UV environment variables
+ENV UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy \
+    UV_PYTHON_DOWNLOADS=never
+
+WORKDIR /build
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy project files
+COPY pyproject.toml README.md ./
+COPY src ./src
+
+# Create virtual environment and install dependencies with UV
+RUN uv venv /opt/venv && \
+    . /opt/venv/bin/activate && \
+    uv pip install --no-cache .
+
+# -----------------------------------------------------------------------------
+# Stage 2: Production Runtime
+# -----------------------------------------------------------------------------
+FROM python:3.12-slim-bookworm AS production
+
+# Install tini for proper signal handling and runtime dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    tini \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
+
+# Security: Create non-root user
+RUN groupadd --gid 1000 appgroup && \
+    useradd --uid 1000 --gid appgroup --shell /bin/bash --create-home appuser
+
+WORKDIR /app
+
+# Copy virtual environment from builder
+COPY --from=builder /opt/venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Copy application code
+COPY --chown=appuser:appgroup src/telegram_bot ./telegram_bot
+
+# Create logs directory (optional for Cloud Run, logs go to stdout)
+RUN mkdir -p /app/logs && chown appuser:appgroup /app/logs
+
+# Switch to non-root user
+USER appuser
+
+# Environment variables for Cloud Run
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONFAULTHANDLER=1 \
+    # Server configuration
+    SERVER_HOST=0.0.0.0 \
+    SERVER_PORT=8080 \
+    ENVIRONMENT=production \
+    # Logging (Cloud Run uses stdout)
+    LOG_LEVEL=INFO \
+    LOG_TO_FILE=false \
+    # Webhook configuration
+    WEBHOOK_MAX_CONNECTIONS=100 \
+    WEBHOOK_IP_FILTER_ENABLED=false \
+    WEBHOOK_DROP_PENDING_UPDATES=true \
+    # Concurrency optimized for Cloud Run
+    WORKERS=1 \
+    LIMIT_CONCURRENCY=100 \
+    LIMIT_MAX_REQUESTS=10000 \
+    BACKLOG=2048 \
+    # Timeouts
+    TIMEOUT_KEEP_ALIVE=30 \
+    TIMEOUT_GRACEFUL_SHUTDOWN=30 \
+    # Gunicorn settings
+    GUNICORN_WORKERS=1 \
+    GUNICORN_THREADS=8 \
+    GUNICORN_TIMEOUT=300
+
+# Cloud Run uses port 8080 by default
+EXPOSE 8080
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')" || exit 1
+
+# Use tini as init system for proper signal handling
+ENTRYPOINT ["/usr/bin/tini", "--"]
+
+# Run with uvicorn (Cloud Run handles scaling, single worker is optimal)
+CMD ["sh", "-c", "uvicorn telegram_bot.entrypoint:app --host 0.0.0.0 --port ${SERVER_PORT:-8080} --workers 1 --timeout-keep-alive 30 --log-level info"]

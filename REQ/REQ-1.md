@@ -886,10 +886,132 @@ empresarial basada en Telegram Webhooks usando Python, aiogram, FastAPI,
 Docker y las mejores prácticas modernas de ingeniería, con énfasis en
 seguridad avanzada, alta concurrencia, logging robusto y configuración flexible.
 
-**Versión**: 1.1.0
-**Última actualización**: 2025-12-05
+---
+
+## Cloud Run Deployment
+
+### Estructura de Despliegue
+
+```
+deploy/
+├── Dockerfile.cloudrun     # Imagen optimizada para Cloud Run con UV
+├── env.production          # Documentación de variables de entorno
+├── setup-gcp.sh            # Script de configuración inicial de GCP
+├── deploy-manual.sh        # Script de despliegue manual
+└── README.md               # Guía de despliegue
+
+cloudbuild.yaml             # Pipeline CI/CD de Cloud Build
+```
+
+### Configuración de Cloud Run
+
+| Configuración | Valor |
+|---------------|-------|
+| **Servicio** | multi-channel-service |
+| **Región** | us-central1 |
+| **Service Account** | orchestrator-sa (compartido con otros servicios) |
+| **Autenticación** | IAM (--no-allow-unauthenticated) |
+| **Puerto** | 8080 |
+| **Memoria** | 512Mi |
+| **CPU** | 1 |
+| **Min/Max Instancias** | 0-10 |
+| **Concurrencia** | 80 |
+| **Timeout** | 300s |
+
+### Secret Manager
+
+| Secreto | Descripción |
+|---------|-------------|
+| `telegram-bot-token` | Token de la API de Telegram |
+| `webhook-secret` | Token secreto para validación de webhook |
+
+### Comandos de Despliegue
+
+```bash
+# Configuración inicial (ejecutar una vez)
+./deploy/setup-gcp.sh
+
+# Desplegar con Cloud Build
+gcloud builds submit --config=cloudbuild.yaml
+
+# Desplegar manualmente
+./deploy/deploy-manual.sh
+```
+
+### Code Reviews Implementados
+
+| Herramienta | Propósito |
+|-------------|-----------|
+| **ruff** | Linting y formato |
+| **mypy** | Verificación de tipos |
+| **bandit** | Análisis de seguridad |
+| **pytest** | Tests unitarios y E2E |
+
+### Diagrama de Arquitectura Cloud Run
+
+```mermaid
+flowchart TB
+    subgraph GCP["Google Cloud Platform"]
+        subgraph CloudRun["Cloud Run"]
+            MCS["multi-channel-service\nPort: 8080\nSA: orchestrator-sa"]
+        end
+
+        subgraph SecretManager["Secret Manager"]
+            S1["telegram-bot-token"]
+            S2["webhook-secret"]
+        end
+
+        subgraph IAM["IAM"]
+            SA["orchestrator-sa\nroles/run.invoker\nroles/secretmanager.secretAccessor"]
+        end
+    end
+
+    subgraph External["External"]
+        TG["Telegram Servers"]
+    end
+
+    TG -->|HTTPS POST| MCS
+    MCS --> SA
+    SA --> S1
+    SA --> S2
+
+    style MCS fill:#4285F4,color:#fff
+    style S1 fill:#EA4335,color:#fff
+    style S2 fill:#EA4335,color:#fff
+    style SA fill:#FBBC04,color:#333
+    style TG fill:#0088cc,color:#fff
+```
+
+### Testing en Producción
+
+```bash
+# Health check
+SERVICE_URL=$(gcloud run services describe multi-channel-service \
+    --region=us-central1 --format="value(status.url)")
+TOKEN=$(gcloud auth print-identity-token --audiences="$SERVICE_URL")
+curl -H "Authorization: Bearer $TOKEN" "$SERVICE_URL/health"
+
+# Logs
+gcloud run logs read multi-channel-service --region=us-central1 --limit=100
+
+# Describe servicio
+gcloud run services describe multi-channel-service --region=us-central1
+```
+
+---
+
+## Conclusión
+
+Este documento define el blueprint profesional para una aplicación
+empresarial basada en Telegram Webhooks usando Python, aiogram, FastAPI,
+Docker y las mejores prácticas modernas de ingeniería, con énfasis en
+seguridad avanzada, alta concurrencia, logging robusto y configuración flexible.
+
+**Versión**: 1.2.0
+**Última actualización**: 2025-12-28
 **Variables de configuración**: 28
 **Endpoints**: 2 (`/webhook`, `/health`)
 **Bot Commands**: 2 (`/start`, `/help`)
 **Input Types**: 16
 **Security Layers**: 5 (Rate Limit, IP Filter, Token, JSON, Update)
+**Deployment**: Cloud Run with IAM + orchestrator-sa

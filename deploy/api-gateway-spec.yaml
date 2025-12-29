@@ -1,0 +1,101 @@
+# =============================================================================
+# OpenAPI Specification for Multi-Channel Service API Gateway
+# =============================================================================
+# This spec configures Google Cloud API Gateway to proxy requests to Cloud Run.
+#
+# Features:
+#   - Public webhook endpoint for Telegram (validated via X-Telegram-Bot-Api-Secret-Token)
+#   - IAM-protected health endpoint via service account
+#   - HTTP/2 backend protocol
+#   - Path translation to Cloud Run service
+#
+# Deploy:
+#   gcloud api-gateway api-configs create CONFIG_NAME \
+#       --api=multi-channel-api --openapi-spec=api-gateway-spec.yaml
+# =============================================================================
+swagger: '2.0'
+info:
+  title: Multi-Channel Service API Gateway
+  description: API Gateway for Multi-Channel Service - Telegram Bot Webhook Handler
+  version: '1.0.0'
+host: multi-channel-gateway-vq1gs9i.uc.gateway.dev
+schemes:
+  - https
+produces:
+  - application/json
+consumes:
+  - application/json
+
+# Backend configuration - Cloud Run service
+x-google-backend:
+  address: https://multi-channel-service-4k3haexkga-uc.a.run.app
+  protocol: h2
+  jwt_audience: https://multi-channel-service-4k3haexkga-uc.a.run.app
+  path_translation: APPEND_PATH_TO_ADDRESS
+
+paths:
+  # Telegram webhook endpoint - PUBLIC access (Telegram validates via secret header)
+  /webhook:
+    post:
+      summary: Telegram webhook endpoint
+      description: |
+        Receives updates from Telegram servers.
+        Authentication is handled by the service via X-Telegram-Bot-Api-Secret-Token header.
+      operationId: telegramWebhook
+      security: []  # Public - no API Gateway auth, service validates internally
+      parameters:
+        - name: X-Telegram-Bot-Api-Secret-Token
+          in: header
+          type: string
+          description: Secret token for webhook validation (validated by service)
+        - name: body
+          in: body
+          required: true
+          schema:
+            type: object
+            description: Telegram Update object
+      responses:
+        '200':
+          description: Update processed successfully
+        '401':
+          description: Invalid or missing secret token
+        '429':
+          description: Rate limit exceeded
+        '500':
+          description: Internal server error
+    options:
+      summary: CORS preflight for webhook endpoint
+      description: Handle CORS preflight requests
+      operationId: webhookCors
+      security: []
+      responses:
+        '200':
+          description: CORS preflight response
+
+  # Health check endpoint - PUBLIC for monitoring
+  /health:
+    get:
+      summary: Health check endpoint
+      description: Returns service health status
+      operationId: healthCheck
+      security: []  # Public for external monitoring
+      responses:
+        '200':
+          description: Service is healthy
+          schema:
+            type: object
+            properties:
+              status:
+                type: string
+                example: "healthy"
+              service:
+                type: string
+                example: "multi-channel-service"
+              version:
+                type: string
+                example: "1.0.0"
+              environment:
+                type: string
+                example: "production"
+        '503':
+          description: Service unavailable

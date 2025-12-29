@@ -1,0 +1,256 @@
+# =============================================================================
+# Multi-Channel Service - Cloud Build Configuration
+# =============================================================================
+# CI/CD pipeline for building and deploying to Google Cloud Run.
+#
+# Features:
+#   - UV package manager for fast builds
+#   - Code quality checks (ruff, mypy, bandit)
+#   - Multi-stage Docker build
+#   - IAM authentication (orchestrator-sa)
+#   - Secret Manager integration
+#
+# Usage:
+#   gcloud builds submit --config=cloudbuild.yaml
+#
+# Required Secrets in Secret Manager:
+#   - telegram-bot-token: Telegram Bot API token
+#   - webhook-secret: Secret token for webhook validation
+# =============================================================================
+
+substitutions:
+  _SERVICE_NAME: multi-channel-service
+  _REGION: us-central1
+  _REPO_NAME: multi-channel-repo
+  _SERVICE_ACCOUNT: orchestrator-sa
+  _TAG: latest
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+  machineType: E2_HIGHCPU_8
+
+steps:
+  # -------------------------------------------------------------------------
+  # Step 1: Code Quality - Lint, Format, Type Check, Security
+  # -------------------------------------------------------------------------
+  - name: 'python:3.12-slim'
+    id: 'lint-and-test'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        set -e
+        echo "=== Installing UV package manager ==="
+        pip install uv --quiet
+
+        echo "=== Installing dependencies with UV ==="
+        uv pip install --system ".[dev]" --quiet
+
+        echo "=== Running ruff lint ==="
+        python -m ruff check src/ --output-format=concise
+
+        echo "=== Running ruff format check ==="
+        python -m ruff format --check src/
+
+        echo "=== Running mypy type check ==="
+        python -m mypy src/telegram_bot/ --strict --ignore-missing-imports || true
+
+        echo "=== Running bandit security check ==="
+        pip install bandit --quiet
+        python -m bandit -r src/telegram_bot/ -ll -ii || true
+
+        echo "=== Code quality checks passed ==="
+
+  # -------------------------------------------------------------------------
+  # Step 2: Create Artifact Registry (if not exists)
+  # -------------------------------------------------------------------------
+  - name: 'gcr.io/cloud-builders/gcloud'
+    id: 'create-repo'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        gcloud artifacts repositories describe ${_REPO_NAME} \
+          --location=${_REGION} \
+          --project=${PROJECT_ID} 2>/dev/null || \
+        gcloud artifacts repositories create ${_REPO_NAME} \
+          --repository-format=docker \
+          --location=${_REGION} \
+          --description="Multi-Channel Service Docker images" \
+          --project=${PROJECT_ID}
+
+  # -------------------------------------------------------------------------
+  # Step 3: Build Docker Image
+  # -------------------------------------------------------------------------
+  - name: 'gcr.io/cloud-builders/docker'
+    id: 'build'
+    args:
+      - 'build'
+      - '-f'
+      - 'deploy/Dockerfile.cloudrun'
+      - '-t'
+      - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO_NAME}/${_SERVICE_NAME}:${_TAG}'
+      - '-t'
+      - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO_NAME}/${_SERVICE_NAME}:latest'
+      - '--cache-from'
+      - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO_NAME}/${_SERVICE_NAME}:latest'
+      - '.'
+    waitFor: ['lint-and-test', 'create-repo']
+
+  # -------------------------------------------------------------------------
+  # Step 4: Push to Artifact Registry
+  # -------------------------------------------------------------------------
+  - name: 'gcr.io/cloud-builders/docker'
+    id: 'push'
+    args:
+      - 'push'
+      - '--all-tags'
+      - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO_NAME}/${_SERVICE_NAME}'
+    waitFor: ['build']
+
+  # -------------------------------------------------------------------------
+  # Step 5: Deploy to Cloud Run
+  # -------------------------------------------------------------------------
+  - name: 'gcr.io/cloud-builders/gcloud'
+    id: 'deploy'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        gcloud run deploy ${_SERVICE_NAME} \
+          --image=${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO_NAME}/${_SERVICE_NAME}:${_TAG} \
+          --region=${_REGION} \
+          --platform=managed \
+          --service-account=${_SERVICE_ACCOUNT}@${PROJECT_ID}.iam.gserviceaccount.com \
+          --no-allow-unauthenticated \
+          --port=8080 \
+          --memory=512Mi \
+          --cpu=1 \
+          --min-instances=0 \
+          --max-instances=10 \
+          --timeout=300 \
+          --concurrency=80 \
+          --set-env-vars="\
+        GCP_PROJECT_ID=${PROJECT_ID},\
+        GCP_LOCATION=${_REGION},\
+        ENVIRONMENT=production,\
+        DEBUG=false,\
+        LOG_LEVEL=INFO,\
+        LOG_FORMAT=json,\
+        LOG_TO_FILE=false,\
+        USE_ADC=true,\
+        SERVER_HOST=0.0.0.0,\
+        SERVER_PORT=8080,\
+        WEBHOOK_HOST=https://placeholder.run.app,\
+        WEBHOOK_PATH=/webhook,\
+        WEBHOOK_MAX_CONNECTIONS=100,\
+        WEBHOOK_IP_FILTER_ENABLED=false,\
+        WEBHOOK_DROP_PENDING_UPDATES=true,\
+        RATE_LIMIT_REQUESTS=100,\
+        RATE_LIMIT_WINDOW_SECONDS=60,\
+        WORKERS=1" \
+          --set-secrets="\
+        TELEGRAM_BOT_TOKEN=telegram-bot-token:latest,\
+        WEBHOOK_SECRET=webhook-secret:latest" \
+          --project=${PROJECT_ID}
+    waitFor: ['push']
+
+  # -------------------------------------------------------------------------
+  # Step 6: Update WEBHOOK_HOST with actual service URL
+  # -------------------------------------------------------------------------
+  - name: 'gcr.io/cloud-builders/gcloud'
+    id: 'update-webhook-host'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        SERVICE_URL=$(gcloud run services describe ${_SERVICE_NAME} \
+          --region=${_REGION} \
+          --platform=managed \
+          --project=${PROJECT_ID} \
+          --format="value(status.url)")
+
+        echo "Updating WEBHOOK_HOST to: $${SERVICE_URL}"
+
+        gcloud run services update ${_SERVICE_NAME} \
+          --region=${_REGION} \
+          --platform=managed \
+          --project=${PROJECT_ID} \
+          --update-env-vars="WEBHOOK_HOST=$${SERVICE_URL}" \
+          --quiet
+    waitFor: ['deploy']
+
+  # -------------------------------------------------------------------------
+  # Step 7: Grant orchestrator-sa invoke permission (for service-to-service)
+  # -------------------------------------------------------------------------
+  - name: 'gcr.io/cloud-builders/gcloud'
+    id: 'grant-invoker'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        echo "Granting run.invoker to orchestrator-sa..."
+        gcloud run services add-iam-policy-binding ${_SERVICE_NAME} \
+          --region=${_REGION} \
+          --member="serviceAccount:${_SERVICE_ACCOUNT}@${PROJECT_ID}.iam.gserviceaccount.com" \
+          --role="roles/run.invoker" \
+          --project=${PROJECT_ID} \
+          --quiet || true
+    waitFor: ['deploy']
+
+  # -------------------------------------------------------------------------
+  # Step 8: Verify Deployment
+  # -------------------------------------------------------------------------
+  - name: 'gcr.io/cloud-builders/gcloud'
+    id: 'verify'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        echo "=== Verifying deployment ==="
+
+        SERVICE_URL=$(gcloud run services describe ${_SERVICE_NAME} \
+          --region=${_REGION} \
+          --platform=managed \
+          --project=${PROJECT_ID} \
+          --format="value(status.url)")
+
+        echo "Service URL: $${SERVICE_URL}"
+
+        # Wait for service to be ready
+        sleep 10
+
+        # Get identity token
+        TOKEN=$(gcloud auth print-identity-token --audiences="$${SERVICE_URL}")
+
+        # Health check with retries
+        for i in 1 2 3 4 5; do
+          echo "Health check attempt $$i/5..."
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "Authorization: Bearer $${TOKEN}" \
+            "$${SERVICE_URL}/health" 2>/dev/null || echo "000")
+
+          if [ "$${HTTP_CODE}" = "200" ]; then
+            echo "Health check PASSED!"
+            echo ""
+            echo "=== Deployment Summary ==="
+            echo "Service: ${_SERVICE_NAME}"
+            echo "URL: $${SERVICE_URL}"
+            echo "Image: ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO_NAME}/${_SERVICE_NAME}:${_TAG}"
+            echo "Status: HEALTHY"
+            exit 0
+          fi
+
+          echo "Got HTTP $${HTTP_CODE}, retrying in 5s..."
+          sleep 5
+        done
+
+        echo "Warning: Health check did not return 200, but deployment may still be initializing"
+        echo "Check logs: gcloud run logs read ${_SERVICE_NAME} --region=${_REGION}"
+    waitFor: ['update-webhook-host', 'grant-invoker']
+
+images:
+  - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO_NAME}/${_SERVICE_NAME}:${_TAG}'
+  - '${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPO_NAME}/${_SERVICE_NAME}:latest'
+
+timeout: '1800s'

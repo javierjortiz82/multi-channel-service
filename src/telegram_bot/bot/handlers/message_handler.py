@@ -59,6 +59,7 @@ async def _safe_answer(message: Message, text: str) -> None:
     except TelegramAPIError as e:
         logger.warning("Failed to send message to chat %d: %s", message.chat.id, e)
 
+
 # Welcome message for /start command
 START_MESSAGE = """
 <b>¡Bienvenido!</b> 👋
@@ -158,7 +159,9 @@ def create_message_router() -> Router:
 
         async def handler(message: Message) -> None:
             classifier.classify(message)
-            logger.debug("Processed %s message from user %s", type_name, message.from_user)
+            logger.debug(
+                "Processed %s message from user %s", type_name, message.from_user
+            )
 
         handler.__name__ = f"handle_{type_name}"
         handler.__doc__ = f"Handle {type_name} messages."

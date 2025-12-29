@@ -254,7 +254,7 @@ class Settings(BaseSettings):
         if not v.startswith("/"):
             raise ValueError("webhook_path must start with '/'")
         # Check for valid URL path characters
-        if not re.match(r'^/[a-zA-Z0-9_\-/]*$', v):
+        if not re.match(r"^/[a-zA-Z0-9_\-/]*$", v):
             raise ValueError(
                 "webhook_path must contain only alphanumeric characters, "
                 "underscores, hyphens, and forward slashes"
@@ -332,11 +332,9 @@ class Settings(BaseSettings):
             pass
 
         # Check if it's a valid hostname
-        hostname_pattern = r'^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*$'
+        hostname_pattern = r"^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*$"
         if not re.match(hostname_pattern, v):
-            raise ValueError(
-                f"server_host '{v}' is not a valid IP address or hostname"
-            )
+            raise ValueError(f"server_host '{v}' is not a valid IP address or hostname")
 
         return v
 
@@ -361,7 +359,7 @@ class Settings(BaseSettings):
             raise ValueError("log_dir cannot be empty")
 
         # Check for null characters (security issue)
-        if '\x00' in v:
+        if "\x00" in v:
             raise ValueError("log_dir cannot contain null characters")
 
         # Check for overly long paths

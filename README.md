@@ -674,6 +674,44 @@ docker compose down
 
 ---
 
+## Cloud Run Deployment
+
+For production deployment on Google Cloud Run, see [deploy/README.md](deploy/README.md).
+
+### Quick Deploy
+
+```bash
+# 1. Initial setup (run once)
+chmod +x deploy/setup-gcp.sh
+./deploy/setup-gcp.sh
+
+# 2. Configure secrets
+gcloud secrets versions add telegram-bot-token --data-file=<(echo -n 'YOUR_BOT_TOKEN')
+gcloud secrets versions add webhook-secret --data-file=<(echo -n 'YOUR_SECRET')
+
+# 3. Deploy with Cloud Build
+gcloud builds submit --config=cloudbuild.yaml
+```
+
+### Features
+
+| Feature | Description |
+|---------|-------------|
+| **UV Package Manager** | 10x faster builds than pip |
+| **IAM Authentication** | Secure service-to-service communication |
+| **orchestrator-sa** | Shared service account for microservices |
+| **Secret Manager** | Secure credential storage |
+| **Auto-scaling** | 0-10 instances based on load |
+
+### Service URLs
+
+After deployment, the service will be available at:
+```
+https://multi-channel-service-[PROJECT_NUMBER].us-central1.run.app
+```
+
+---
+
 ## License
 
 MIT License - see [LICENSE](LICENSE) for details.
