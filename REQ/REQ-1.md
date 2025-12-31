@@ -1000,18 +1000,131 @@ gcloud run services describe multi-channel-service --region=us-central1
 
 ---
 
+## Intelligent Message Processing
+
+### Arquitectura de Procesamiento
+
+El bot implementa un sistema de procesamiento inteligente que enruta los mensajes
+a servicios especializados de backend basándose en su tipo.
+
+```mermaid
+flowchart LR
+    subgraph Input["📨 Input"]
+        MSG["Telegram Message"]
+    end
+
+    subgraph Classify["📊 Classification"]
+        IC["InputClassifier"]
+    end
+
+    subgraph Process["🧠 Processing"]
+        MP["MessageProcessor"]
+    end
+
+    subgraph Services["☁️ Cloud Run Services"]
+        NLP["NLP Service\nGemini 2.0"]
+        ASR["ASR Service\nSpeech-to-Text"]
+        OCR["OCR Service\nVision API"]
+    end
+
+    subgraph Output["💬 Output"]
+        RESP["AI Response"]
+    end
+
+    MSG --> IC
+    IC --> MP
+    MP -->|"Text"| NLP
+    MP -->|"Voice/Audio"| ASR
+    MP -->|"Photo"| OCR
+    ASR -->|"Transcription"| NLP
+    OCR -->|"Extracted Text"| NLP
+    NLP --> RESP
+
+    style MSG fill:#0088cc,color:#fff
+    style IC fill:#00bcd4,color:#fff
+    style MP fill:#9c27b0,color:#fff
+    style NLP fill:#34A853,color:#fff
+    style ASR fill:#EA4335,color:#fff
+    style OCR fill:#FBBC04,color:#333
+    style RESP fill:#4CAF50,color:#fff
+```
+
+### Componentes del Sistema
+
+| Componente | Archivo | Responsabilidad |
+|------------|---------|-----------------|
+| **InputClassifier** | `input_classifier.py` | Clasificación de tipo de mensaje |
+| **MessageProcessor** | `message_processor.py` | Routing y orquestación de servicios |
+| **InternalClient** | `internal_client.py` | Comunicación IAM service-to-service |
+
+### Flujo de Procesamiento por Tipo
+
+#### Texto
+```
+Message.text → MessageProcessor → NLP Service → Response
+```
+
+#### Audio/Voz
+```
+Message.voice → Download → ASR Service → Transcription → NLP Service → Response
+```
+
+#### Imagen
+```
+Message.photo → Download → OCR Service → Extracted Text → NLP Service → Response
+```
+
+### Servicios de Backend
+
+| Servicio | Endpoint | Modelo |
+|----------|----------|--------|
+| **NLP Service** | `/api/v1/process` | Gemini 2.0 Flash |
+| **ASR Service** | `/transcribe` | Google Speech-to-Text |
+| **OCR Service** | `/ocr` | Google Vision API |
+
+### Autenticación Service-to-Service
+
+```python
+# Obtención automática de token IAM
+def _get_identity_token(self, audience: str) -> str:
+    request = google.auth.transport.requests.Request()
+    token = id_token.fetch_id_token(request, audience)
+    return token
+```
+
+### Códigos de Estado de Procesamiento
+
+| Estado | Descripción |
+|--------|-------------|
+| `SUCCESS` | Mensaje procesado correctamente |
+| `ERROR` | Error en el procesamiento |
+| `UNSUPPORTED` | Tipo de mensaje no soportado |
+| `NO_CONTENT` | Mensaje sin contenido procesable |
+
+### Variables de Entorno para Servicios
+
+| Variable | Descripción | Default |
+|----------|-------------|---------|
+| `NLP_SERVICE_URL` | URL del servicio NLP | `nlp-service-*.run.app` |
+| `ASR_SERVICE_URL` | URL del servicio ASR | `asr-service-*.run.app` |
+| `OCR_SERVICE_URL` | URL del servicio OCR | `ocr-service-*.run.app` |
+
+---
+
 ## Conclusión
 
 Este documento define el blueprint profesional para una aplicación
 empresarial basada en Telegram Webhooks usando Python, aiogram, FastAPI,
 Docker y las mejores prácticas modernas de ingeniería, con énfasis en
-seguridad avanzada, alta concurrencia, logging robusto y configuración flexible.
+seguridad avanzada, alta concurrencia, logging robusto, configuración flexible
+y procesamiento inteligente de mensajes con servicios de IA.
 
-**Versión**: 1.2.0
-**Última actualización**: 2025-12-28
-**Variables de configuración**: 28
+**Versión**: 1.3.0
+**Última actualización**: 2025-12-31
+**Variables de configuración**: 31
 **Endpoints**: 2 (`/webhook`, `/health`)
 **Bot Commands**: 2 (`/start`, `/help`)
 **Input Types**: 16
 **Security Layers**: 5 (Rate Limit, IP Filter, Token, JSON, Update)
-**Deployment**: Cloud Run with IAM + orchestrator-sa
+**Deployment**: Cloud Run with IAM + orchestrator-sa + API Gateway
+**AI Services**: NLP (Gemini), ASR (Speech-to-Text), OCR (Vision)

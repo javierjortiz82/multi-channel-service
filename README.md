@@ -380,6 +380,89 @@ mindmap
 
 ---
 
+## Intelligent Message Processing
+
+The bot now includes intelligent message processing that routes messages to specialized backend services based on their type.
+
+### Processing Architecture
+
+```mermaid
+flowchart TB
+    subgraph Telegram["📱 Telegram"]
+        MSG["Incoming Message"]
+    end
+
+    subgraph Gateway["🌐 API Gateway"]
+        GW["multi-channel-gateway"]
+    end
+
+    subgraph Service["⚡ multi-channel-service"]
+        IC["📊 Input Classifier"]
+        MP["🧠 Message Processor"]
+        IC --> MP
+    end
+
+    subgraph Backend["☁️ Cloud Run Services"]
+        NLP["🤖 NLP Service<br/><small>Gemini 2.0</small>"]
+        ASR["🎤 ASR Service<br/><small>Speech-to-Text</small>"]
+        OCR["📷 OCR Service<br/><small>Image-to-Text</small>"]
+    end
+
+    subgraph Response["💬 Response"]
+        RESP["AI-Generated Reply"]
+    end
+
+    MSG --> GW
+    GW --> IC
+    MP -->|Text| NLP
+    MP -->|Audio/Voice| ASR
+    MP -->|Photo| OCR
+    ASR --> NLP
+    OCR --> NLP
+    NLP --> RESP
+    RESP --> MSG
+
+    style MSG fill:#0088cc,color:#fff
+    style GW fill:#4285F4,color:#fff
+    style IC fill:#00bcd4,color:#fff
+    style MP fill:#9c27b0,color:#fff
+    style NLP fill:#34A853,color:#fff
+    style ASR fill:#EA4335,color:#fff
+    style OCR fill:#FBBC04,color:#333
+    style RESP fill:#4CAF50,color:#fff
+```
+
+### Message Type Routing
+
+| Message Type | Processing Flow | Backend Service |
+|--------------|-----------------|-----------------|
+| **Text** | Text → NLP | Gemini 2.0 Flash |
+| **Voice/Audio** | Audio → ASR → NLP | Speech-to-Text + Gemini |
+| **Photo** | Image → OCR → NLP | Vision API + Gemini |
+| **Command** | Handled locally | Built-in handlers |
+| **Other** | Acknowledgment | N/A |
+
+### Service Integration
+
+The bot uses IAM-authenticated service-to-service communication:
+
+```python
+from telegram_bot.services.message_processor import get_processor
+
+processor = get_processor()
+result = await processor.process_message(message, input_type, bot)
+```
+
+### Backend Services
+
+| Service | URL | Purpose |
+|---------|-----|---------|
+| NLP Service | `nlp-service-*.run.app` | Text processing with Gemini |
+| ASR Service | `asr-service-*.run.app` | Audio transcription |
+| OCR Service | `ocr-service-*.run.app` | Image text extraction |
+
+---
+
 ## Project Structure
 
 ```
@@ -394,16 +477,22 @@ telegram-bot/
 └── 📁 src/telegram_bot/
     ├── 📄 main.py             # Entry point
     ├── 📄 app.py              # FastAPI + webhook
+    ├── 📄 entrypoint.py       # Production entrypoint
     ├── 📄 logging_config.py   # Banner & logging setup
     ├── 📁 config/
     │   └── settings.py        # Pydantic v2 config
     ├── 📁 bot/handlers/
-    │   └── message_handler.py # Message handling
+    │   └── message_handler.py # Message handling + routing
     ├── 📁 services/
     │   ├── input_classifier.py    # Type classification
+    │   ├── message_processor.py   # Intelligent message routing
+    │   ├── internal_client.py     # IAM service-to-service client
     │   └── webhook_service.py     # Security & IP filter
     └── 📁 tests/
-        └── test_*.py          # Test files
+        ├── test_input_classifier.py
+        ├── test_message_processor.py
+        ├── test_internal_client.py
+        └── test_*.py          # Other test files
 ```
 
 ---

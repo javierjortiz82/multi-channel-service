@@ -3,6 +3,7 @@
 - Security Hardening
 - Cloud Run Deployment Configured
 - API Gateway Configured
+- Intelligent Message Processing (NLP, ASR, OCR)
 
 ## Cloud Run Deployment
 
@@ -66,3 +67,24 @@ curl -H "Authorization: Bearer $TOKEN" "$SERVICE_URL/health"
 BOT_TOKEN=$(gcloud secrets versions access latest --secret=telegram-bot-token)
 curl "https://api.telegram.org/bot$BOT_TOKEN/getWebhookInfo"
 ```
+
+## Intelligent Message Processing
+
+### Message Type Routing
+- **Text** → NLP Service (Gemini 2.0)
+- **Voice/Audio** → ASR Service → NLP Service
+- **Photo** → OCR Service → NLP Service
+
+### Backend Services
+| Service | URL |
+|---------|-----|
+| NLP | `nlp-service-4k3haexkga-uc.a.run.app` |
+| ASR | `asr-service-4k3haexkga-uc.a.run.app` |
+| OCR | `ocr-service-4k3haexkga-uc.a.run.app` |
+
+### Key Components
+- `services/message_processor.py`: Routing logic
+- `services/internal_client.py`: IAM-authenticated service calls
+- `bot/handlers/message_handler.py`: Updated handlers
+
+### Status: OPERATIONAL (2025-12-31)
