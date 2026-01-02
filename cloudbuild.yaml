@@ -156,27 +156,26 @@ steps:
     waitFor: ['push']
 
   # -------------------------------------------------------------------------
-  # Step 6: Update WEBHOOK_HOST with actual service URL
+  # Step 6: Update WEBHOOK_HOST with API Gateway URL (NOT Cloud Run URL)
   # -------------------------------------------------------------------------
+  # IMPORTANT: Telegram webhook must point to API Gateway, not Cloud Run.
+  # Cloud Run is IAM-protected and will reject Telegram requests with 403.
   - name: 'gcr.io/cloud-builders/gcloud'
     id: 'update-webhook-host'
     entrypoint: 'bash'
     args:
       - '-c'
       - |
-        SERVICE_URL=$(gcloud run services describe ${_SERVICE_NAME} \
-          --region=${_REGION} \
-          --platform=managed \
-          --project=${PROJECT_ID} \
-          --format="value(status.url)")
+        # API Gateway URL (public endpoint for Telegram webhooks)
+        GATEWAY_URL="https://multi-channel-gateway-vq1gs9i.uc.gateway.dev"
 
-        echo "Updating WEBHOOK_HOST to: $${SERVICE_URL}"
+        echo "Updating WEBHOOK_HOST to API Gateway: $${GATEWAY_URL}"
 
         gcloud run services update ${_SERVICE_NAME} \
           --region=${_REGION} \
           --platform=managed \
           --project=${PROJECT_ID} \
-          --update-env-vars="WEBHOOK_HOST=$${SERVICE_URL}" \
+          --update-env-vars="WEBHOOK_HOST=$${GATEWAY_URL}" \
           --quiet
     waitFor: ['deploy']
 
