@@ -209,7 +209,7 @@ def create_message_router() -> Router:
         processor = get_processor()
 
         # Send typing indicator while processing
-        await message.answer_chat_action("typing")
+        await bot.send_chat_action(chat_id=message.chat.id, action="typing")
 
         result = await processor.process_message(message, input_type, bot)
 
@@ -223,7 +223,7 @@ def create_message_router() -> Router:
         input_type = classifier.classify(message)
         processor = get_processor()
 
-        await message.answer_chat_action("typing")
+        await bot.send_chat_action(chat_id=message.chat.id, action="typing")
 
         result = await processor.process_message(message, input_type, bot)
 
@@ -237,7 +237,7 @@ def create_message_router() -> Router:
         input_type = classifier.classify(message)
         processor = get_processor()
 
-        await message.answer_chat_action("typing")
+        await bot.send_chat_action(chat_id=message.chat.id, action="typing")
 
         result = await processor.process_message(message, input_type, bot)
 
