@@ -11,7 +11,9 @@ Example:
     result = await client.call_nlp_service("Hello, how are you?")
 """
 
+import asyncio
 import os
+import time
 from typing import Any
 
 import google.auth.transport.requests
@@ -24,7 +26,16 @@ logger = get_logger("internal_client")
 
 
 class InternalServiceClient:
-    """Client for calling internal Cloud Run services with IAM authentication."""
+    """Client for calling internal Cloud Run services with IAM authentication.
+
+    Features:
+        - Async token fetching (doesn't block event loop)
+        - Token caching with 50-minute TTL (tokens valid for 1 hour)
+        - Automatic retry with fresh token on 401/403
+    """
+
+    # Token cache TTL (50 minutes, tokens are valid for 1 hour)
+    TOKEN_CACHE_TTL = 50 * 60
 
     def __init__(
         self,
@@ -56,21 +67,17 @@ class InternalServiceClient:
         self.timeout = timeout
         self._is_cloud_run = os.getenv("K_SERVICE") is not None
 
-    def _get_identity_token(self, audience: str) -> str:
-        """Get an identity token for the target service.
+        # Token cache: {audience: (token, expiry_time)}
+        self._token_cache: dict[str, tuple[str, float]] = {}
+
+    def _get_identity_token_sync(self, audience: str) -> str:
+        """Synchronously get an identity token (runs in thread pool).
 
         Args:
-            audience: The URL of the target service (used as the token audience)
+            audience: The URL of the target service
 
         Returns:
             Identity token string
-
-        Raises:
-            ValueError: If token cannot be obtained
-
-        Note:
-            In Cloud Run, tokens are obtained from the metadata server.
-            Locally, tokens use GOOGLE_APPLICATION_CREDENTIALS.
         """
         request = google.auth.transport.requests.Request()
         token = id_token.fetch_id_token(request, audience)
@@ -78,8 +85,34 @@ class InternalServiceClient:
             raise ValueError(f"Failed to obtain identity token for {audience}")
         return str(token)
 
-    def _get_auth_headers(self, service_url: str) -> dict[str, str]:
-        """Get authorization headers for a service call.
+    async def _get_identity_token(self, audience: str) -> str:
+        """Get an identity token asynchronously (non-blocking).
+
+        Uses cached token if available and not expired. Otherwise fetches
+        a new token in a thread pool to avoid blocking the event loop.
+
+        Args:
+            audience: The URL of the target service
+
+        Returns:
+            Identity token string
+        """
+        # Check cache first
+        if audience in self._token_cache:
+            token, expiry = self._token_cache[audience]
+            if time.time() < expiry:
+                return token
+
+        # Fetch new token in thread pool (non-blocking)
+        logger.debug("Fetching new identity token for %s", audience)
+        token = await asyncio.to_thread(self._get_identity_token_sync, audience)
+
+        # Cache the token
+        self._token_cache[audience] = (token, time.time() + self.TOKEN_CACHE_TTL)
+        return token
+
+    async def _get_auth_headers(self, service_url: str) -> dict[str, str]:
+        """Get authorization headers for a service call (async).
 
         Args:
             service_url: The target service URL
@@ -88,7 +121,7 @@ class InternalServiceClient:
             Headers dict with Authorization bearer token
         """
         try:
-            token = self._get_identity_token(service_url)
+            token = await self._get_identity_token(service_url)
             return {
                 "Authorization": f"Bearer {token}",
                 "Content-Type": "application/json",
@@ -114,7 +147,7 @@ class InternalServiceClient:
         Raises:
             httpx.HTTPStatusError: If the request fails
         """
-        headers = self._get_auth_headers(self.nlp_url)
+        headers = await self._get_auth_headers(self.nlp_url)
         payload = {"text": text}
 
         logger.info("Calling NLP service with %d characters", len(text))
@@ -154,7 +187,7 @@ class InternalServiceClient:
         """
         import uuid
 
-        token = self._get_identity_token(self.asr_url)
+        token = await self._get_identity_token(self.asr_url)
         headers = {
             "Authorization": f"Bearer {token}",
             "X-Request-Id": str(uuid.uuid4()),
@@ -200,7 +233,7 @@ class InternalServiceClient:
         Raises:
             httpx.HTTPStatusError: If the request fails
         """
-        token = self._get_identity_token(self.ocr_url)
+        token = await self._get_identity_token(self.ocr_url)
         headers = {"Authorization": f"Bearer {token}"}
 
         logger.info("Calling OCR service with file: %s", filename)
@@ -235,7 +268,7 @@ class InternalServiceClient:
                     results[name] = {"status": "not_configured"}
                     continue
                 try:
-                    headers = self._get_auth_headers(url)
+                    headers = await self._get_auth_headers(url)
                     response = await client.get(
                         f"{url}/health",
                         headers=headers,

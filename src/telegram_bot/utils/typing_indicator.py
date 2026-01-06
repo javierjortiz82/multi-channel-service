@@ -24,8 +24,8 @@ from telegram_bot.logging_config import get_logger
 
 logger = get_logger("typing_indicator")
 
-# Telegram typing indicator lasts ~5 seconds, refresh every 4 seconds
-TYPING_REFRESH_INTERVAL = 4.0
+# Telegram typing indicator lasts ~5 seconds, refresh every 2 seconds for smoother UX
+TYPING_REFRESH_INTERVAL = 2.0
 
 
 @asynccontextmanager
