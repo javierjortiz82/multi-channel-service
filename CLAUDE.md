@@ -113,3 +113,43 @@ curl "https://api.telegram.org/bot$BOT_TOKEN/getWebhookInfo"
 - Voice/Audio: ASR transcription + NLP
 - Photos: OCR extraction + NLP
 - Response time: ~3 seconds
+
+## Conversation Memory (2026-01-06)
+
+El bot mantiene contexto de conversación entre mensajes usando el `chat_id` de Telegram.
+
+### Arquitectura
+```
+Telegram Message → message_processor.py → internal_client.py → NLP Service
+                   (extracts chat_id)     (sends as conversation_id)    (stores in PostgreSQL)
+```
+
+### Cambios Realizados
+- `services/internal_client.py`: Método `call_nlp_service()` acepta parámetro `conversation_id`
+- `services/message_processor.py`: Pasa `chat_id` como `conversation_id` en:
+  - `_process_text_message()` (línea 149)
+  - `_process_audio_message()` (línea 256)
+  - `_process_photo_message()` (línea 346)
+
+### Request Format al NLP Service
+```json
+{
+  "text": "mensaje del usuario",
+  "conversation_id": "5850719087"  // Telegram chat_id
+}
+```
+
+### Flujo de Conversación
+1. Usuario envía mensaje a Telegram
+2. `message_processor.py` extrae `message.chat.id`
+3. `internal_client.py` envía al NLP con `conversation_id`
+4. NLP recupera historial de PostgreSQL (últimos 10 mensajes)
+5. NLP incluye historial en el prompt para Gemini
+6. NLP almacena nuevo mensaje y respuesta
+7. Bot responde manteniendo contexto
+
+### Logs de Verificación
+```
+conversation_history_loaded: messages_count=6, conversation_id=5850719087
+unified_template_rendered: has_history=True
+```

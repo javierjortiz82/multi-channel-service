@@ -145,19 +145,29 @@ class MessageProcessor:
                 input_type=InputType.TEXT,
             )
 
-        return await self.process_text(text)
+        # Use chat_id as conversation_id for context continuity
+        conversation_id = str(message.chat.id)
+        return await self.process_text(text, conversation_id=conversation_id)
 
-    async def process_text(self, text: str) -> ProcessingResult:
+    async def process_text(
+        self,
+        text: str,
+        conversation_id: str | None = None,
+    ) -> ProcessingResult:
         """Process text via NLP service.
 
         Args:
             text: The text to process
+            conversation_id: Optional conversation ID for context continuity
 
         Returns:
             ProcessingResult with NLP response
         """
         try:
-            result = await self._client.call_nlp_service(text)
+            result = await self._client.call_nlp_service(
+                text,
+                conversation_id=conversation_id,
+            )
             response = result.get("response", "")
 
             return ProcessingResult(
@@ -242,8 +252,12 @@ class MessageProcessor:
 
             logger.info("Audio transcribed: %s", transcribed_text[:100])
 
-            # Process transcribed text via NLP
-            nlp_result = await self._client.call_nlp_service(transcribed_text)
+            # Process transcribed text via NLP with conversation context
+            conversation_id = str(message.chat.id)
+            nlp_result = await self._client.call_nlp_service(
+                transcribed_text,
+                conversation_id=conversation_id,
+            )
             response = nlp_result.get("response", "")
 
             return ProcessingResult(
@@ -328,9 +342,11 @@ class MessageProcessor:
 
             logger.info("OCR extracted: %s", extracted_text[:100])
 
-            # Process extracted text via NLP
+            # Process extracted text via NLP with conversation context
+            conversation_id = str(message.chat.id)
             nlp_result = await self._client.call_nlp_service(
-                f"Analiza el siguiente texto extraído de una imagen:\n\n{extracted_text}"
+                f"Analiza el siguiente texto extraído de una imagen:\n\n{extracted_text}",
+                conversation_id=conversation_id,
             )
             response = nlp_result.get("response", "")
 

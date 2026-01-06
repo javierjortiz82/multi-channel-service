@@ -193,11 +193,17 @@ class InternalServiceClient:
         elapsed = (time.perf_counter() - start) * 1000
         logger.info("Client warmup completed in %.0fms", elapsed)
 
-    async def call_nlp_service(self, text: str) -> dict[str, Any]:
+    async def call_nlp_service(
+        self,
+        text: str,
+        conversation_id: str | None = None,
+    ) -> dict[str, Any]:
         """Call the NLP service for text processing using Gemini.
 
         Args:
             text: Text to process (max 32000 characters)
+            conversation_id: Optional conversation ID for context continuity.
+                Typically the Telegram chat_id.
 
         Returns:
             NLP processing response
@@ -210,9 +216,15 @@ class InternalServiceClient:
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
         }
-        payload = {"text": text}
+        payload: dict[str, Any] = {"text": text}
+        if conversation_id:
+            payload["conversation_id"] = conversation_id
 
-        logger.info("Calling NLP service with %d characters", len(text))
+        logger.info(
+            "Calling NLP service with %d characters, conversation_id=%s",
+            len(text),
+            conversation_id,
+        )
         start = time.perf_counter()
 
         client = await self._get_http_client()
