@@ -18,17 +18,55 @@
 - **Port**: 8080
 - **Status**: DEPLOYED & OPERATIONAL (2025-12-31)
 
-### IMPORTANT: Webhook Configuration
+### CRITICAL: Webhook Configuration
 > **El webhook de Telegram DEBE apuntar al API Gateway, NO a Cloud Run directamente.**
-> Cloud Run está protegido por IAM y rechazará las solicitudes de Telegram con 403.
+> Cloud Run está protegido por IAM (política de organización impide acceso público).
 
+**Arquitectura obligatoria:**
+```
+Telegram → API Gateway (público) → Cloud Run (privado/IAM)
+              ↓
+         X-Telegram-Bot-Api-Secret-Token validado por el servicio
+```
+
+**Configurar webhook (con secret_token):**
 ```bash
-# Configurar webhook correctamente (apuntar al API Gateway)
+# Obtener credenciales
 WEBHOOK_SECRET=$(gcloud secrets versions access latest --secret=webhook-secret)
-BOT_TOKEN=$(gcloud secrets versions access latest --secret=telegram-bot-token)
-curl "https://api.telegram.org/bot${BOT_TOKEN}/setWebhook" \
-    -d "url=https://multi-channel-gateway-vq1gs9i.uc.gateway.dev/webhook" \
-    -d "secret_token=${WEBHOOK_SECRET}"
+BOT_TOKEN="7826000531:AAFC6bY0Qs_9sF4WdpNxkq2NqWuF3DqYLuI"
+
+# Configurar webhook - INCLUIR secret_token ES OBLIGATORIO
+curl "https://api.telegram.org/bot${BOT_TOKEN}/setWebhook?url=https://multi-channel-gateway-vq1gs9i.uc.gateway.dev/webhook&secret_token=${WEBHOOK_SECRET}"
+```
+
+**Verificar webhook:**
+```bash
+curl "https://api.telegram.org/bot${BOT_TOKEN}/getWebhookInfo"
+# Debe mostrar: url=gateway, pending_update_count=0, NO last_error_message
+```
+
+### Troubleshooting Webhook
+
+| Error | Causa | Solución |
+|-------|-------|----------|
+| 404 Not Found | URL apunta a ngrok expirado | Reconfigurar con API Gateway URL |
+| 401 Unauthorized | Falta `secret_token` en setWebhook | Agregar `&secret_token=...` al setWebhook |
+| 403 Forbidden | URL apunta a Cloud Run directo | Cambiar a API Gateway URL |
+| "Invalid secret token" | Token no coincide | Verificar secret en Secret Manager |
+| pending_update_count > 0 | Mensajes no procesados | Verificar que el servicio responda |
+
+**Script de diagnóstico rápido:**
+```bash
+# 1. Verificar gateway responde
+curl -s https://multi-channel-gateway-vq1gs9i.uc.gateway.dev/health
+# Debe retornar: {"status":"healthy"}
+
+# 2. Verificar webhook config
+curl -s "https://api.telegram.org/bot${BOT_TOKEN}/getWebhookInfo" | python3 -m json.tool
+
+# 3. Si hay errores, reconfigurar:
+WEBHOOK_SECRET=$(gcloud secrets versions access latest --secret=webhook-secret)
+curl "https://api.telegram.org/bot${BOT_TOKEN}/setWebhook?url=https://multi-channel-gateway-vq1gs9i.uc.gateway.dev/webhook&secret_token=${WEBHOOK_SECRET}"
 ```
 
 ### API Gateway
