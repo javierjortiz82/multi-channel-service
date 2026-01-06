@@ -31,9 +31,9 @@ Telegram → API Gateway (público) → Cloud Run (privado/IAM)
 
 **Configurar webhook (con secret_token):**
 ```bash
-# Obtener credenciales
+# Obtener credenciales desde Secret Manager (NUNCA hardcodear tokens)
 WEBHOOK_SECRET=$(gcloud secrets versions access latest --secret=webhook-secret)
-BOT_TOKEN="7826000531:AAFC6bY0Qs_9sF4WdpNxkq2NqWuF3DqYLuI"
+BOT_TOKEN=$(gcloud secrets versions access latest --secret=telegram-bot-token)
 
 # Configurar webhook - INCLUIR secret_token ES OBLIGATORIO
 curl "https://api.telegram.org/bot${BOT_TOKEN}/setWebhook?url=https://multi-channel-gateway-vq1gs9i.uc.gateway.dev/webhook&secret_token=${WEBHOOK_SECRET}"
