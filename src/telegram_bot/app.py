@@ -21,6 +21,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from telegram_bot.bot.handlers import create_message_router
 from telegram_bot.config.settings import Settings, get_settings
 from telegram_bot.logging_config import get_logger, setup_logging
+from telegram_bot.services.internal_client import warmup_client
 from telegram_bot.services.webhook_service import validate_telegram_request
 
 logger = get_logger("app")
@@ -262,6 +263,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     # Use retry logic to handle flood control from multiple workers
     await set_webhook_with_retry(bot, settings)
+
+    # Pre-warm internal service connections (tokens + HTTP connections)
+    # This eliminates cold-start latency on first user message
+    await warmup_client()
 
     yield
 

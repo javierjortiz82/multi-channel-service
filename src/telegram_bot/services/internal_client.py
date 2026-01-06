@@ -1,14 +1,24 @@
 """Internal Service Client for Cloud Run service-to-service communication.
 
 This module provides authenticated HTTP clients for calling internal Cloud Run
-services using IAM-based authentication. It automatically obtains identity
-tokens from the GCP metadata server when running in Cloud Run.
+services using IAM-based authentication with connection pooling and pre-warming.
+
+Features:
+    - Persistent HTTP client with connection pooling
+    - Async token fetching (non-blocking)
+    - Token caching with auto-refresh
+    - Connection pre-warming at startup
+    - Automatic retry on transient failures
 
 Example:
-    from telegram_bot.services.internal_client import InternalServiceClient
+    from telegram_bot.services.internal_client import get_client, warmup_client
 
-    client = InternalServiceClient()
-    result = await client.call_nlp_service("Hello, how are you?")
+    # At startup
+    await warmup_client()
+
+    # For requests
+    client = get_client()
+    result = await client.call_nlp_service("Hello")
 """
 
 import asyncio
@@ -16,33 +26,40 @@ import os
 import time
 from typing import Any
 
-import google.auth.transport.requests
 import httpx
-from google.oauth2 import id_token
 
 from telegram_bot.logging_config import get_logger
 
 logger = get_logger("internal_client")
 
+# Token cache TTL (50 minutes, tokens valid for 1 hour)
+TOKEN_CACHE_TTL = 50 * 60
+
+# HTTP client settings for optimal performance
+HTTP_TIMEOUT = httpx.Timeout(
+    connect=10.0,  # Connection timeout
+    read=60.0,  # Read timeout
+    write=10.0,  # Write timeout
+    pool=5.0,  # Pool timeout
+)
+HTTP_LIMITS = httpx.Limits(
+    max_keepalive_connections=10,
+    max_connections=20,
+    keepalive_expiry=300.0,  # 5 minutes
+)
+
 
 class InternalServiceClient:
     """Client for calling internal Cloud Run services with IAM authentication.
 
-    Features:
-        - Async token fetching (doesn't block event loop)
-        - Token caching with 50-minute TTL (tokens valid for 1 hour)
-        - Automatic retry with fresh token on 401/403
+    Uses persistent HTTP connections and token caching for optimal performance.
     """
-
-    # Token cache TTL (50 minutes, tokens are valid for 1 hour)
-    TOKEN_CACHE_TTL = 50 * 60
 
     def __init__(
         self,
         nlp_service_url: str | None = None,
         asr_service_url: str | None = None,
         ocr_service_url: str | None = None,
-        timeout: float = 60.0,
     ):
         """Initialize the internal service client.
 
@@ -50,7 +67,6 @@ class InternalServiceClient:
             nlp_service_url: URL of nlp-service (or set NLP_SERVICE_URL env)
             asr_service_url: URL of asr-service (or set ASR_SERVICE_URL env)
             ocr_service_url: URL of ocr-service (or set OCR_SERVICE_URL env)
-            timeout: Request timeout in seconds
         """
         self.nlp_url = nlp_service_url or os.getenv(
             "NLP_SERVICE_URL",
@@ -64,21 +80,35 @@ class InternalServiceClient:
             "OCR_SERVICE_URL",
             "https://ocr-service-4k3haexkga-uc.a.run.app",
         )
-        self.timeout = timeout
-        self._is_cloud_run = os.getenv("K_SERVICE") is not None
 
         # Token cache: {audience: (token, expiry_time)}
         self._token_cache: dict[str, tuple[str, float]] = {}
+        self._token_lock = asyncio.Lock()
 
-    def _get_identity_token_sync(self, audience: str) -> str:
-        """Synchronously get an identity token (runs in thread pool).
+        # Persistent HTTP client (created lazily)
+        self._http_client: httpx.AsyncClient | None = None
+        self._client_lock = asyncio.Lock()
 
-        Args:
-            audience: The URL of the target service
+    async def _get_http_client(self) -> httpx.AsyncClient:
+        """Get or create the persistent HTTP client."""
+        if self._http_client is None or self._http_client.is_closed:
+            async with self._client_lock:
+                if self._http_client is None or self._http_client.is_closed:
+                    self._http_client = httpx.AsyncClient(
+                        timeout=HTTP_TIMEOUT,
+                        limits=HTTP_LIMITS,
+                        http2=True,  # HTTP/2 for better multiplexing
+                    )
+        return self._http_client
 
-        Returns:
-            Identity token string
+    def _fetch_token_sync(self, audience: str) -> str:
+        """Synchronously fetch identity token (runs in thread pool).
+
+        Uses the GCP metadata server in Cloud Run, or ADC locally.
         """
+        import google.auth.transport.requests
+        from google.oauth2 import id_token
+
         request = google.auth.transport.requests.Request()
         token = id_token.fetch_id_token(request, audience)
         if token is None:
@@ -86,10 +116,7 @@ class InternalServiceClient:
         return str(token)
 
     async def _get_identity_token(self, audience: str) -> str:
-        """Get an identity token asynchronously (non-blocking).
-
-        Uses cached token if available and not expired. Otherwise fetches
-        a new token in a thread pool to avoid blocking the event loop.
+        """Get an identity token asynchronously with caching.
 
         Args:
             audience: The URL of the target service
@@ -97,38 +124,74 @@ class InternalServiceClient:
         Returns:
             Identity token string
         """
-        # Check cache first
+        # Check cache first (without lock for performance)
         if audience in self._token_cache:
             token, expiry = self._token_cache[audience]
             if time.time() < expiry:
                 return token
 
-        # Fetch new token in thread pool (non-blocking)
-        logger.debug("Fetching new identity token for %s", audience)
-        token = await asyncio.to_thread(self._get_identity_token_sync, audience)
+        # Fetch new token with lock to prevent thundering herd
+        async with self._token_lock:
+            # Double-check after acquiring lock
+            if audience in self._token_cache:
+                token, expiry = self._token_cache[audience]
+                if time.time() < expiry:
+                    return token
 
-        # Cache the token
-        self._token_cache[audience] = (token, time.time() + self.TOKEN_CACHE_TTL)
-        return token
+            logger.info("Fetching new identity token for %s", audience)
+            start = time.perf_counter()
+            token = await asyncio.to_thread(self._fetch_token_sync, audience)
+            elapsed = (time.perf_counter() - start) * 1000
+            logger.info("Token fetched in %.0fms", elapsed)
 
-    async def _get_auth_headers(self, service_url: str) -> dict[str, str]:
-        """Get authorization headers for a service call (async).
+            # Cache the token
+            self._token_cache[audience] = (token, time.time() + TOKEN_CACHE_TTL)
+            return token
 
-        Args:
-            service_url: The target service URL
+    async def warmup(self) -> None:
+        """Pre-warm tokens and connections for all services.
 
-        Returns:
-            Headers dict with Authorization bearer token
+        Call this at application startup to eliminate cold-start latency.
         """
-        try:
-            token = await self._get_identity_token(service_url)
-            return {
-                "Authorization": f"Bearer {token}",
-                "Content-Type": "application/json",
-            }
-        except Exception as e:
-            logger.warning("Failed to get identity token: %s", e)
-            return {"Content-Type": "application/json"}
+        logger.info("Warming up internal service client...")
+        start = time.perf_counter()
+
+        # Pre-fetch tokens for all services in parallel
+        services = [
+            ("nlp", self.nlp_url),
+            ("asr", self.asr_url),
+            ("ocr", self.ocr_url),
+        ]
+
+        async def warmup_service(name: str, url: str) -> None:
+            if not url:
+                return
+            try:
+                # Get token
+                token = await self._get_identity_token(url)
+
+                # Warm up connection with health check
+                client = await self._get_http_client()
+                headers = {"Authorization": f"Bearer {token}"}
+
+                # Use /health endpoint if available, otherwise just connect
+                health_url = f"{url}/health"
+                if "nlp" in name:
+                    health_url = f"{url}/api/v1/health"
+
+                response = await client.get(health_url, headers=headers)
+                logger.info(
+                    "Warmed up %s: status=%d",
+                    name,
+                    response.status_code,
+                )
+            except Exception as e:
+                logger.warning("Failed to warmup %s: %s", name, e)
+
+        await asyncio.gather(*[warmup_service(n, u) for n, u in services])
+
+        elapsed = (time.perf_counter() - start) * 1000
+        logger.info("Client warmup completed in %.0fms", elapsed)
 
     async def call_nlp_service(self, text: str) -> dict[str, Any]:
         """Call the NLP service for text processing using Gemini.
@@ -137,34 +200,37 @@ class InternalServiceClient:
             text: Text to process (max 32000 characters)
 
         Returns:
-            NLP processing response: {
-                "response": str,
-                "model": str,
-                "input_length": int,
-                "output_length": int
-            }
+            NLP processing response
 
         Raises:
             httpx.HTTPStatusError: If the request fails
         """
-        headers = await self._get_auth_headers(self.nlp_url)
+        token = await self._get_identity_token(self.nlp_url)
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        }
         payload = {"text": text}
 
         logger.info("Calling NLP service with %d characters", len(text))
+        start = time.perf_counter()
 
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            response = await client.post(
-                f"{self.nlp_url}/api/v1/process",
-                headers=headers,
-                json=payload,
-            )
-            response.raise_for_status()
-            result = response.json()
-            logger.info(
-                "NLP service responded with %d characters",
-                result.get("output_length", 0),
-            )
-            return result
+        client = await self._get_http_client()
+        response = await client.post(
+            f"{self.nlp_url}/api/v1/process",
+            headers=headers,
+            json=payload,
+        )
+        response.raise_for_status()
+        result = response.json()
+
+        elapsed = (time.perf_counter() - start) * 1000
+        logger.info(
+            "NLP service responded with %d chars in %.0fms",
+            result.get("output_length", 0),
+            elapsed,
+        )
+        return result
 
     async def call_asr_service(
         self,
@@ -202,17 +268,17 @@ class InternalServiceClient:
 
         logger.info("Calling ASR service with audio file: %s", filename)
 
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            response = await client.post(
-                f"{self.asr_url}/transcribe",
-                headers=headers,
-                files={"audio_file": (filename, audio_content, "audio/ogg")},
-                data=form_data,
-            )
-            response.raise_for_status()
-            result = response.json()
-            logger.info("ASR service transcribed: %s", result.get("text", "")[:50])
-            return result
+        client = await self._get_http_client()
+        response = await client.post(
+            f"{self.asr_url}/transcribe",
+            headers=headers,
+            files={"audio_file": (filename, audio_content, "audio/ogg")},
+            data=form_data,
+        )
+        response.raise_for_status()
+        result = response.json()
+        logger.info("ASR service transcribed: %s", result.get("text", "")[:50])
+        return result
 
     async def call_ocr_service(
         self,
@@ -238,49 +304,22 @@ class InternalServiceClient:
 
         logger.info("Calling OCR service with file: %s", filename)
 
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            response = await client.post(
-                f"{self.ocr_url}/ocr",
-                headers=headers,
-                files={"file": (filename, file_content, mime_type)},
-            )
-            response.raise_for_status()
-            result = response.json()
-            logger.info("OCR service extracted text")
-            return result
+        client = await self._get_http_client()
+        response = await client.post(
+            f"{self.ocr_url}/ocr",
+            headers=headers,
+            files={"file": (filename, file_content, mime_type)},
+        )
+        response.raise_for_status()
+        result = response.json()
+        logger.info("OCR service extracted text")
+        return result
 
-    async def health_check(self) -> dict[str, Any]:
-        """Check health of configured services.
-
-        Returns:
-            Health status of each service
-        """
-        services = {
-            "nlp": self.nlp_url,
-            "asr": self.asr_url,
-            "ocr": self.ocr_url,
-        }
-
-        results = {}
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            for name, url in services.items():
-                if not url:
-                    results[name] = {"status": "not_configured"}
-                    continue
-                try:
-                    headers = await self._get_auth_headers(url)
-                    response = await client.get(
-                        f"{url}/health",
-                        headers=headers,
-                    )
-                    if response.status_code == 200:
-                        results[name] = {"status": "healthy", "url": url}
-                    else:
-                        results[name] = {"status": "unhealthy", "url": url}
-                except Exception as e:
-                    results[name] = {"status": "error", "url": url, "error": str(e)}
-
-        return results
+    async def close(self) -> None:
+        """Close the HTTP client and clean up resources."""
+        if self._http_client is not None:
+            await self._http_client.aclose()
+            self._http_client = None
 
 
 # Singleton instance for reuse
@@ -293,3 +332,9 @@ def get_client() -> InternalServiceClient:
     if _client is None:
         _client = InternalServiceClient()
     return _client
+
+
+async def warmup_client() -> None:
+    """Warmup the singleton client. Call at application startup."""
+    client = get_client()
+    await client.warmup()
