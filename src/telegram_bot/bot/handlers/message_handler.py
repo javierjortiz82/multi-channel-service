@@ -38,6 +38,7 @@ from aiogram.types import Message
 from telegram_bot.logging_config import get_logger
 from telegram_bot.services.input_classifier import InputClassifier
 from telegram_bot.services.message_processor import ProcessingStatus, get_processor
+from telegram_bot.utils.typing_indicator import continuous_typing
 
 logger = get_logger("handlers.message")
 
@@ -196,10 +197,9 @@ def create_message_router() -> Router:
         input_type = classifier.classify(message)
         processor = get_processor()
 
-        # Show typing indicator while LLM processes (~500-2000ms)
-        await bot.send_chat_action(chat_id=message.chat.id, action="typing")
-
-        result = await processor.process_message(message, input_type, bot)
+        # Continuous typing indicator - refreshes every 4s while LLM processes
+        async with continuous_typing(bot, message.chat.id):
+            result = await processor.process_message(message, input_type, bot)
 
         if result.response:
             await _safe_answer(message, result.response)
@@ -211,10 +211,9 @@ def create_message_router() -> Router:
         input_type = classifier.classify(message)
         processor = get_processor()
 
-        # Send typing indicator while processing
-        await bot.send_chat_action(chat_id=message.chat.id, action="typing")
-
-        result = await processor.process_message(message, input_type, bot)
+        # Continuous typing - ASR + NLP can take several seconds
+        async with continuous_typing(bot, message.chat.id):
+            result = await processor.process_message(message, input_type, bot)
 
         if result.response:
             await _safe_answer(message, result.response)
@@ -226,9 +225,9 @@ def create_message_router() -> Router:
         input_type = classifier.classify(message)
         processor = get_processor()
 
-        await bot.send_chat_action(chat_id=message.chat.id, action="typing")
-
-        result = await processor.process_message(message, input_type, bot)
+        # Continuous typing - ASR + NLP can take several seconds
+        async with continuous_typing(bot, message.chat.id):
+            result = await processor.process_message(message, input_type, bot)
 
         if result.response:
             await _safe_answer(message, result.response)
@@ -240,9 +239,9 @@ def create_message_router() -> Router:
         input_type = classifier.classify(message)
         processor = get_processor()
 
-        await bot.send_chat_action(chat_id=message.chat.id, action="typing")
-
-        result = await processor.process_message(message, input_type, bot)
+        # Continuous typing - OCR + NLP can take several seconds
+        async with continuous_typing(bot, message.chat.id):
+            result = await processor.process_message(message, input_type, bot)
 
         if result.response:
             await _safe_answer(message, result.response)
