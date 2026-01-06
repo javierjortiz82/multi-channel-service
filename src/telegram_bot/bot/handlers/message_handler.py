@@ -196,6 +196,9 @@ def create_message_router() -> Router:
         input_type = classifier.classify(message)
         processor = get_processor()
 
+        # Show typing indicator while LLM processes (~500-2000ms)
+        await bot.send_chat_action(chat_id=message.chat.id, action="typing")
+
         result = await processor.process_message(message, input_type, bot)
 
         if result.response:
