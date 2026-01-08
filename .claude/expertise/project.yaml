@@ -1,0 +1,191 @@
+# Multi-Channel Service - Project Expertise
+# Este archivo contiene el conocimiento acumulado del proyecto
+# Claude lo lee al inicio de cada sesión para mantener contexto
+
+project:
+  name: multi-channel-service
+  description: Telegram bot con procesamiento inteligente de mensajes usando NLP, ASR y OCR
+  status: PRODUCTION_OPERATIONAL
+  last_updated: "2026-01-07"
+
+architecture:
+  pattern: Microservices con API Gateway
+  flow: |
+    Telegram → API Gateway (público) → Cloud Run (privado/IAM) → Backend Services
+  critical_rule: |
+    NUNCA apuntar webhook de Telegram directamente a Cloud Run.
+    Siempre usar API Gateway como intermediario (política org impide acceso público a Cloud Run).
+
+infrastructure:
+  cloud_provider: Google Cloud Platform
+  region: us-central1
+
+  services:
+    multi_channel_service:
+      cloud_run_url: https://multi-channel-service-4k3haexkga-uc.a.run.app
+      api_gateway_url: https://multi-channel-gateway-vq1gs9i.uc.gateway.dev
+      webhook_url: https://multi-channel-gateway-vq1gs9i.uc.gateway.dev/webhook
+      port: 8080
+      authentication: IAM for Cloud Run, public for Gateway webhook
+      service_account: orchestrator-sa
+
+    nlp_service:
+      url: https://nlp-service-4k3haexkga-uc.a.run.app
+      purpose: Procesamiento de lenguaje natural con Gemini 2.0
+      database: PostgreSQL (test.nlp_conversation_history)
+      memory: Últimos 10 mensajes (5 turnos), expiran en 24h
+
+    asr_service:
+      url: https://asr-service-4k3haexkga-uc.a.run.app
+      purpose: Speech-to-text para mensajes de voz/audio
+
+    ocr_service:
+      url: https://ocr-service-4k3haexkga-uc.a.run.app
+      purpose: Extracción de texto de imágenes
+
+  api_gateway:
+    name: multi-channel-gateway
+    api_name: multi-channel-api
+    config: multi-channel-config-v1
+
+  secrets:
+    - name: telegram-bot-token
+      description: Token del bot de Telegram
+    - name: webhook-secret
+      description: Secret para validación X-Telegram-Bot-Api-Secret-Token
+    - name: database-url
+      description: Connection string PostgreSQL
+
+message_routing:
+  text: NLP Service directo
+  voice_audio: ASR Service → NLP Service
+  photo: OCR Service → NLP Service
+
+conversation_memory:
+  identifier: chat_id de Telegram
+  storage: PostgreSQL tabla test.nlp_conversation_history
+  context_size: 10 mensajes (5 turnos usuario/asistente)
+  expiration: 24 horas
+  flow: |
+    message_processor.py extrae chat_id →
+    internal_client.py envía como conversation_id →
+    NLP Service almacena/recupera historial
+
+key_files:
+  - path: src/telegram_bot/services/message_processor.py
+    purpose: Enrutamiento de mensajes según tipo
+  - path: src/telegram_bot/services/internal_client.py
+    purpose: Llamadas IAM-autenticadas a servicios internos
+  - path: src/telegram_bot/bot/handlers/message_handler.py
+    purpose: Handlers de mensajes de Telegram
+  - path: deploy/Dockerfile.cloudrun
+    purpose: Imagen Docker de producción con UV
+  - path: cloudbuild.yaml
+    purpose: Pipeline CI/CD de Cloud Build
+  - path: deploy/setup-gcp.sh
+    purpose: Setup inicial de infraestructura GCP
+
+code_quality:
+  tools:
+    - ruff (lint + format)
+    - mypy (types)
+    - bandit (security)
+    - pytest (tests)
+  package_manager: UV (reemplaza pip, ~10x más rápido)
+
+patterns_learned:
+  aiogram_v3:
+    - description: Usar bot.send_chat_action() en lugar de message.answer_chat_action()
+      reason: El método answer_chat_action() no existe en aiogram v3
+      fix_date: "2026-01-06"
+
+  telegram_webhook:
+    - description: Siempre incluir secret_token en setWebhook
+      reason: Sin secret_token, cualquiera puede enviar requests al webhook
+      command: |
+        curl "https://api.telegram.org/bot${TOKEN}/setWebhook?url=${GATEWAY_URL}/webhook&secret_token=${SECRET}"
+
+  cloud_build:
+    - description: Usar $$PATH para variables de entorno en cloudbuild.yaml
+      reason: Un solo $ es interpretado como sustitución de Cloud Build
+
+  gcp_authentication:
+    - description: Usar google-auth con requests para IAM-authenticated calls
+      reason: httpx no tiene transport adapter oficial para google-auth
+
+lessons_learned:
+  - title: Webhook debe apuntar a API Gateway
+    context: Cloud Run está protegido por IAM, política de organización impide acceso público
+    solution: Usar API Gateway como proxy público hacia Cloud Run
+
+  - title: Secret token es obligatorio
+    context: Sin validación, el webhook es vulnerable a requests maliciosos
+    solution: Incluir secret_token en setWebhook, validar X-Telegram-Bot-Api-Secret-Token
+
+  - title: Tokens nunca en código
+    context: Hardcodear tokens expone credenciales en git
+    solution: Siempre usar Secret Manager, obtener dinámicamente con gcloud secrets
+
+  - title: Chat action con bot, no message
+    context: aiogram v3 cambió la API de chat actions
+    solution: bot.send_chat_action(chat_id=..., action=...) en lugar de message.answer_chat_action()
+
+troubleshooting:
+  webhook_404:
+    cause: URL apunta a ngrok expirado o servicio incorrecto
+    solution: Reconfigurar con API Gateway URL
+
+  webhook_401:
+    cause: Falta secret_token en setWebhook
+    solution: Agregar &secret_token=... al setWebhook
+
+  webhook_403:
+    cause: URL apunta directamente a Cloud Run
+    solution: Cambiar a API Gateway URL
+
+  invalid_secret_token:
+    cause: Token no coincide con el configurado
+    solution: Verificar secret en Secret Manager, reconfigurar webhook
+
+  attribute_error_chat_action:
+    cause: Usando message.answer_chat_action() (no existe en aiogram v3)
+    solution: Usar bot.send_chat_action(chat_id=message.chat.id, action="typing")
+
+commands:
+  deploy:
+    full: gcloud builds submit --config=cloudbuild.yaml
+    manual: ./deploy/deploy-manual.sh
+
+  health_check:
+    gateway: curl https://multi-channel-gateway-vq1gs9i.uc.gateway.dev/health
+    cloud_run: |
+      SERVICE_URL=$(gcloud run services describe multi-channel-service --region=us-central1 --format="value(status.url)")
+      TOKEN=$(gcloud auth print-identity-token --audiences="$SERVICE_URL")
+      curl -H "Authorization: Bearer $TOKEN" "$SERVICE_URL/health"
+
+  webhook:
+    check: |
+      BOT_TOKEN=$(gcloud secrets versions access latest --secret=telegram-bot-token)
+      curl "https://api.telegram.org/bot$BOT_TOKEN/getWebhookInfo"
+    configure: |
+      WEBHOOK_SECRET=$(gcloud secrets versions access latest --secret=webhook-secret)
+      BOT_TOKEN=$(gcloud secrets versions access latest --secret=telegram-bot-token)
+      curl "https://api.telegram.org/bot${BOT_TOKEN}/setWebhook?url=https://multi-channel-gateway-vq1gs9i.uc.gateway.dev/webhook&secret_token=${WEBHOOK_SECRET}"
+
+  logs:
+    cloud_run: gcloud run services logs read multi-channel-service --region=us-central1 --limit=50
+
+preferences:
+  - No crear archivos duplicados (ej: models.py → models_simple.py)
+  - Preferir editar archivos existentes sobre crear nuevos
+  - Usar UV en lugar de pip para máximo rendimiento
+  - Tokens y secrets siempre en Secret Manager
+  - Documentación en CLAUDE.md, no crear READMEs adicionales
+  - Code reviews completos antes de deploy (ruff, mypy, bandit, pytest)
+
+response_time:
+  current: ~3 segundos
+  optimizations_applied:
+    - HTTP/2 connection pooling
+    - Connection warmup
+    - Async handlers
