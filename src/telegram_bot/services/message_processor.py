@@ -55,6 +55,29 @@ class ProcessingResult:
     error: str | None = None
 
 
+def _extract_user_info(message: Message) -> dict[str, Any] | None:
+    """Extract user information from a Telegram message for tracking.
+
+    Args:
+        message: The Telegram message object.
+
+    Returns:
+        Dictionary with user info for NLP service, or None if no user info.
+    """
+    if not message.from_user:
+        return None
+
+    user = message.from_user
+    return {
+        "channel": "telegram",
+        "external_id": str(user.id),
+        "first_name": user.first_name or "Unknown",
+        "last_name": user.last_name,
+        "username": user.username,
+        "language_code": user.language_code,
+    }
+
+
 class MessageProcessor:
     """Processor for routing messages to appropriate backend services.
 
@@ -147,18 +170,26 @@ class MessageProcessor:
 
         # Use chat_id as conversation_id for context continuity
         conversation_id = str(message.chat.id)
-        return await self.process_text(text, conversation_id=conversation_id)
+        # Extract user info for tracking
+        user_info = _extract_user_info(message)
+        return await self.process_text(
+            text,
+            conversation_id=conversation_id,
+            user_info=user_info,
+        )
 
     async def process_text(
         self,
         text: str,
         conversation_id: str | None = None,
+        user_info: dict[str, Any] | None = None,
     ) -> ProcessingResult:
         """Process text via NLP service.
 
         Args:
             text: The text to process
             conversation_id: Optional conversation ID for context continuity
+            user_info: Optional user information for tracking
 
         Returns:
             ProcessingResult with NLP response
@@ -167,6 +198,7 @@ class MessageProcessor:
             result = await self._client.call_nlp_service(
                 text,
                 conversation_id=conversation_id,
+                user_info=user_info,
             )
             response = result.get("response", "")
 
@@ -242,7 +274,7 @@ class MessageProcessor:
                 else None,
             )
 
-            transcribed_text = asr_result.get("text", "")
+            transcribed_text = asr_result.get("data", {}).get("transcription", "")
             if not transcribed_text:
                 return ProcessingResult(
                     status=ProcessingStatus.ERROR,
@@ -254,9 +286,11 @@ class MessageProcessor:
 
             # Process transcribed text via NLP with conversation context
             conversation_id = str(message.chat.id)
+            user_info = _extract_user_info(message)
             nlp_result = await self._client.call_nlp_service(
                 transcribed_text,
                 conversation_id=conversation_id,
+                user_info=user_info,
             )
             response = nlp_result.get("response", "")
 
@@ -344,9 +378,11 @@ class MessageProcessor:
 
             # Process extracted text via NLP with conversation context
             conversation_id = str(message.chat.id)
+            user_info = _extract_user_info(message)
             nlp_result = await self._client.call_nlp_service(
                 f"Analiza el siguiente texto extraído de una imagen:\n\n{extracted_text}",
                 conversation_id=conversation_id,
+                user_info=user_info,
             )
             response = nlp_result.get("response", "")
 

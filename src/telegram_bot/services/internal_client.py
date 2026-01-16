@@ -197,6 +197,7 @@ class InternalServiceClient:
         self,
         text: str,
         conversation_id: str | None = None,
+        user_info: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Call the NLP service for text processing using Gemini.
 
@@ -204,6 +205,13 @@ class InternalServiceClient:
             text: Text to process (max 32000 characters)
             conversation_id: Optional conversation ID for context continuity.
                 Typically the Telegram chat_id.
+            user_info: Optional user information for tracking. Should contain:
+                - channel: 'telegram' or 'instagram'
+                - external_id: User's ID in the channel
+                - first_name: User's first name
+                - last_name: User's last name (optional)
+                - username: User's handle (optional)
+                - language_code: User's language (optional)
 
         Returns:
             NLP processing response
@@ -219,11 +227,14 @@ class InternalServiceClient:
         payload: dict[str, Any] = {"text": text}
         if conversation_id:
             payload["conversation_id"] = conversation_id
+        if user_info:
+            payload["user"] = user_info
 
         logger.info(
-            "Calling NLP service with %d characters, conversation_id=%s",
+            "Calling NLP service with %d characters, conversation_id=%s, has_user=%s",
             len(text),
             conversation_id,
+            user_info is not None,
         )
         start = time.perf_counter()
 
@@ -289,7 +300,10 @@ class InternalServiceClient:
         )
         response.raise_for_status()
         result = response.json()
-        logger.info("ASR service transcribed: %s", result.get("text", "")[:50])
+        transcription = result.get("data", {}).get("transcription", "")
+        logger.info(
+            "ASR service transcribed: %s", transcription[:50] if transcription else ""
+        )
         return result
 
     async def call_ocr_service(
