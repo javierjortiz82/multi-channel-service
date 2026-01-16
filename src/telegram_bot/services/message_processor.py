@@ -265,13 +265,10 @@ class MessageProcessor:
 
             audio_content = file_bytes.read()
 
-            # Transcribe via ASR
+            # Transcribe via ASR (no language_hint to enable auto-detection)
             asr_result = await self._client.call_asr_service(
                 audio_content=audio_content,
                 filename="voice.ogg",
-                language_hint=message.from_user.language_code
-                if message.from_user
-                else None,
             )
 
             transcribed_text = asr_result.get("data", {}).get("transcription", "")
