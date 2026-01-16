@@ -1,3 +1,15 @@
+## Project Expertise
+
+**Lee `expertise/project.yaml` para conocimiento acumulado del proyecto.**
+
+Contiene:
+- Lecciones aprendidas y errores comunes
+- Patrones y convenciones del proyecto
+- Troubleshooting quick reference
+- Preferencias del usuario
+
+---
+
 - Bot Funcional
 - DocString
 - Security Hardening

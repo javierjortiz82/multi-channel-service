@@ -1,0 +1,216 @@
+# =============================================================================
+# Multi-Channel Service - Project Expertise
+# =============================================================================
+# Este archivo contiene el conocimiento acumulado del proyecto.
+# Claude lee esta expertise al inicio de cada sesión.
+# Actualizado: 2026-01-16
+# =============================================================================
+
+project:
+  name: multi-channel-service
+  description: Telegram bot con procesamiento inteligente de mensajes (texto, audio, imagen)
+  language: Python 3.12
+  framework: aiogram (Telegram Bot API)
+  package_manager: UV (10x más rápido que pip)
+
+# =============================================================================
+# Arquitectura
+# =============================================================================
+architecture:
+  pattern: Microservicios con API Gateway
+
+  flow:
+    - Telegram → API Gateway (público) → Cloud Run (privado/IAM) → Backend Services
+
+  services:
+    multi-channel-service:
+      url: https://multi-channel-service-4k3haexkga-uc.a.run.app
+      gateway: https://multi-channel-gateway-vq1gs9i.uc.gateway.dev
+      role: Orquestador de mensajes de Telegram
+
+    nlp-service:
+      url: https://nlp-service-4k3haexkga-uc.a.run.app
+      role: Procesamiento de lenguaje natural con Gemini 2.0
+
+    asr-service:
+      url: https://asr-service-4k3haexkga-uc.a.run.app
+      role: Speech-to-Text con Google Cloud STT v2
+      auto_detect_languages: [es-ES, en-US, ar-SA]
+
+    ocr-service:
+      url: https://ocr-service-4k3haexkga-uc.a.run.app
+      role: Extracción de texto de imágenes
+
+  message_routing:
+    TEXT: NLP Service
+    VOICE/AUDIO: ASR Service → NLP Service
+    PHOTO: OCR Service → NLP Service
+
+# =============================================================================
+# Archivos Clave
+# =============================================================================
+key_files:
+  message_processor: src/telegram_bot/services/message_processor.py
+  internal_client: src/telegram_bot/services/internal_client.py
+  input_classifier: src/telegram_bot/services/input_classifier.py
+  dockerfile: deploy/Dockerfile.cloudrun
+  cloudbuild: cloudbuild.yaml
+
+# =============================================================================
+# GCP Configuration
+# =============================================================================
+gcp:
+  project_id: gen-lang-client-0329024102
+  region: us-central1
+  service_account: orchestrator-sa
+
+  secrets:
+    - telegram-bot-token
+    - webhook-secret
+    - database-url
+
+  apis_required:
+    - run.googleapis.com
+    - cloudbuild.googleapis.com
+    - speech.googleapis.com
+    - secretmanager.googleapis.com
+
+# =============================================================================
+# Webhook Configuration (CRÍTICO)
+# =============================================================================
+webhook:
+  critical_note: |
+    El webhook de Telegram DEBE apuntar al API Gateway, NO a Cloud Run directamente.
+    Cloud Run está protegido por IAM (política de organización impide acceso público).
+
+  url: https://multi-channel-gateway-vq1gs9i.uc.gateway.dev/webhook
+
+  setup_command: |
+    BOT_TOKEN=$(gcloud secrets versions access latest --secret=telegram-bot-token)
+    WEBHOOK_SECRET=$(gcloud secrets versions access latest --secret=webhook-secret)
+    curl "https://api.telegram.org/bot${BOT_TOKEN}/setWebhook?url=https://multi-channel-gateway-vq1gs9i.uc.gateway.dev/webhook&secret_token=${WEBHOOK_SECRET}"
+
+# =============================================================================
+# Lecciones Aprendidas
+# =============================================================================
+lessons_learned:
+
+  - id: asr_response_format
+    date: 2026-01-16
+    problem: "Audio siempre fallaba con 'No pude transcribir el audio'"
+    root_cause: |
+      El código buscaba asr_result.get("text") pero el ASR service
+      retorna la transcripción en asr_result.get("data", {}).get("transcription")
+    solution: |
+      Cambiar el parsing de la respuesta ASR:
+      - Incorrecto: asr_result.get("text", "")
+      - Correcto: asr_result.get("data", {}).get("transcription", "")
+    files_affected:
+      - src/telegram_bot/services/message_processor.py
+      - src/telegram_bot/services/internal_client.py
+
+  - id: asr_language_detection
+    date: 2026-01-16
+    problem: "Audio en inglés fallaba cuando usuario tenía Telegram en español"
+    root_cause: |
+      Se pasaba message.from_user.language_code como language_hint al ASR.
+      Esto forzaba al ASR a buscar solo en ese idioma.
+    solution: |
+      No pasar language_hint para que el ASR use auto-detección.
+      El ASR auto-detecta entre: es-ES, en-US, ar-SA
+    files_affected:
+      - src/telegram_bot/services/message_processor.py
+
+  - id: speech_api_disabled
+    date: 2026-01-16
+    problem: "ASR retornaba 500 Internal Server Error"
+    root_cause: "Cloud Speech-to-Text API no estaba habilitada en el proyecto"
+    solution: "gcloud services enable speech.googleapis.com --project=gen-lang-client-0329024102"
+
+  - id: webhook_secret_required
+    date: 2025-12-31
+    problem: "Webhook retornaba 401 Unauthorized"
+    root_cause: "Faltaba secret_token en la configuración del webhook"
+    solution: "Incluir &secret_token=... en el setWebhook URL"
+
+# =============================================================================
+# Patrones y Convenciones
+# =============================================================================
+patterns:
+
+  commit_style:
+    format: "conventional commits"
+    examples:
+      - "fix: correct ASR response parsing"
+      - "feat: add auto-detection for audio language"
+      - "docs: update webhook troubleshooting"
+    co_author: "Co-Authored-By: Claude Opus 4.5 <noreply@anthropic.com>"
+
+  code_quality:
+    linter: ruff
+    formatter: ruff format
+    pre_deploy_validation: true
+    command: "make deploy (incluye validación)"
+
+  deployment:
+    tool: Cloud Build
+    config: cloudbuild.yaml
+    quick_deploy: "make deploy-quick (sin validación)"
+    full_deploy: "make deploy (con lint + format check)"
+
+  logging:
+    style: structlog
+    format: "timestamp | level | message | key=value"
+
+# =============================================================================
+# Comandos Frecuentes
+# =============================================================================
+common_commands:
+  deploy: "make deploy"
+  deploy_quick: "make deploy-quick"
+  logs: "make logs"
+  logs_asr: "make logs-asr"
+  logs_error: "make logs-error"
+  health: "make health"
+  webhook_status: "make webhook"
+  webhook_reset: "make webhook-reset"
+  format: "make format"
+  lint: "make lint"
+
+# =============================================================================
+# Preferencias del Usuario
+# =============================================================================
+preferences:
+  language: Spanish (comunicación), English (código/commits)
+  deploy_style: Cloud Build via Makefile
+  avoid:
+    - No crear archivos nuevos innecesarios
+    - No duplicar archivos (ej: model.py → models_simple.py)
+  prefer:
+    - Editar archivos existentes
+    - Usar Makefile para operaciones comunes
+    - Commits descriptivos con conventional commits
+    - Revisar logs antes de diagnosticar
+
+# =============================================================================
+# Troubleshooting Quick Reference
+# =============================================================================
+troubleshooting:
+
+  audio_not_transcribing:
+    check:
+      - "make logs-asr - Verificar errores del ASR"
+      - "gcloud services list --enabled - Verificar speech.googleapis.com"
+    common_causes:
+      - API Speech-to-Text deshabilitada
+      - language_hint incorrecto
+      - Formato de respuesta parseado incorrectamente
+
+  webhook_errors:
+    404: "URL apunta a ngrok expirado → Reconfigurar con make webhook-reset"
+    401: "Falta secret_token → Usar make webhook-reset (incluye secret)"
+    403: "URL apunta a Cloud Run directo → Debe apuntar a API Gateway"
+
+  deploy_failures:
+    format_error: "make format && make deploy"
+    auth_error: "gcloud auth login"
