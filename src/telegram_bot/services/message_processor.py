@@ -26,6 +26,80 @@ from telegram_bot.services.internal_client import get_client
 
 logger = get_logger("message_processor")
 
+# =============================================================================
+# Internationalized Error Messages
+# =============================================================================
+ERROR_MESSAGES: dict[str, dict[str, str]] = {
+    "es": {
+        "nlp_failed": "Lo siento, hubo un error procesando tu mensaje. Por favor intenta de nuevo.",
+        "asr_failed": "No pude transcribir el audio. Por favor intenta de nuevo.",
+        "ocr_failed": "No pude procesar la imagen. Por favor intenta de nuevo.",
+        "download_failed": "No pude descargar el archivo. Por favor intenta de nuevo.",
+        "empty_text": "No recibí ningún texto para procesar.",
+        "empty_audio": "No pude obtener el audio del mensaje.",
+        "unsupported": "Este tipo de contenido no está soportado aún. Por favor envía texto o audio.",
+        "no_text_in_image": "He recibido tu imagen, pero no encontré texto para procesar.",
+    },
+    "en": {
+        "nlp_failed": "Sorry, there was an error processing your message. Please try again.",
+        "asr_failed": "I couldn't transcribe the audio. Please try again.",
+        "ocr_failed": "I couldn't process the image. Please try again.",
+        "download_failed": "I couldn't download the file. Please try again.",
+        "empty_text": "I didn't receive any text to process.",
+        "empty_audio": "I couldn't get the audio from the message.",
+        "unsupported": "This content type is not supported yet. Please send text or audio.",
+        "no_text_in_image": "I received your image, but I couldn't find any text to process.",
+    },
+    "pt": {
+        "nlp_failed": "Desculpe, houve um erro ao processar sua mensagem. Por favor, tente novamente.",
+        "asr_failed": "Não consegui transcrever o áudio. Por favor, tente novamente.",
+        "ocr_failed": "Não consegui processar a imagem. Por favor, tente novamente.",
+        "download_failed": "Não consegui baixar o arquivo. Por favor, tente novamente.",
+        "empty_text": "Não recebi nenhum texto para processar.",
+        "empty_audio": "Não consegui obter o áudio da mensagem.",
+        "unsupported": "Este tipo de conteúdo ainda não é suportado. Por favor, envie texto ou áudio.",
+        "no_text_in_image": "Recebi sua imagem, mas não encontrei texto para processar.",
+    },
+    "fr": {
+        "nlp_failed": "Désolé, une erreur s'est produite lors du traitement de votre message. Veuillez réessayer.",
+        "asr_failed": "Je n'ai pas pu transcrire l'audio. Veuillez réessayer.",
+        "ocr_failed": "Je n'ai pas pu traiter l'image. Veuillez réessayer.",
+        "download_failed": "Je n'ai pas pu télécharger le fichier. Veuillez réessayer.",
+        "empty_text": "Je n'ai reçu aucun texte à traiter.",
+        "empty_audio": "Je n'ai pas pu obtenir l'audio du message.",
+        "unsupported": "Ce type de contenu n'est pas encore pris en charge. Veuillez envoyer du texte ou de l'audio.",
+        "no_text_in_image": "J'ai reçu votre image, mais je n'ai trouvé aucun texte à traiter.",
+    },
+    "ar": {
+        "nlp_failed": "عذراً، حدث خطأ أثناء معالجة رسالتك. يرجى المحاولة مرة أخرى.",
+        "asr_failed": "لم أتمكن من تحويل الصوت إلى نص. يرجى المحاولة مرة أخرى.",
+        "ocr_failed": "لم أتمكن من معالجة الصورة. يرجى المحاولة مرة أخرى.",
+        "download_failed": "لم أتمكن من تحميل الملف. يرجى المحاولة مرة أخرى.",
+        "empty_text": "لم أستلم أي نص للمعالجة.",
+        "empty_audio": "لم أتمكن من الحصول على الصوت من الرسالة.",
+        "unsupported": "هذا النوع من المحتوى غير مدعوم حالياً. يرجى إرسال نص أو صوت.",
+        "no_text_in_image": "استلمت صورتك، لكن لم أجد أي نص للمعالجة.",
+    },
+}
+
+DEFAULT_LANGUAGE = "es"
+
+
+def _get_message(key: str, language_code: str | None) -> str:
+    """Get localized error message based on user's language.
+
+    Args:
+        key: Message key (e.g., 'asr_failed', 'nlp_failed')
+        language_code: User's language code (e.g., 'en', 'es', 'en-US')
+
+    Returns:
+        Localized message string
+    """
+    # Handle codes like 'en-US' -> 'en'
+    lang = language_code.split("-")[0].lower() if language_code else DEFAULT_LANGUAGE
+    messages = ERROR_MESSAGES.get(lang, ERROR_MESSAGES[DEFAULT_LANGUAGE])
+    return messages.get(key, ERROR_MESSAGES[DEFAULT_LANGUAGE][key])
+
 
 class ProcessingStatus(str, Enum):
     """Status of message processing."""
@@ -88,19 +162,6 @@ class MessageProcessor:
         - Other types: Returns unsupported message
     """
 
-    # Error messages
-    ERROR_NLP_FAILED = (
-        "Lo siento, hubo un error procesando tu mensaje. Por favor intenta de nuevo."
-    )
-    ERROR_ASR_FAILED = "No pude transcribir el audio. Por favor intenta de nuevo."
-    ERROR_OCR_FAILED = "No pude procesar la imagen. Por favor intenta de nuevo."
-    ERROR_DOWNLOAD_FAILED = "No pude descargar el archivo. Por favor intenta de nuevo."
-    ERROR_EMPTY_TEXT = "No recibí ningún texto para procesar."
-    ERROR_EMPTY_AUDIO = "No pude obtener el audio del mensaje."
-    MSG_UNSUPPORTED = (
-        "Este tipo de contenido no está soportado aún. Por favor envía texto o audio."
-    )
-
     def __init__(self) -> None:
         """Initialize the message processor."""
         self._client = get_client()
@@ -145,9 +206,10 @@ class MessageProcessor:
                     input_type=input_type,
                 )
             case _:
+                lang = message.from_user.language_code if message.from_user else None
                 return ProcessingResult(
                     status=ProcessingStatus.UNSUPPORTED,
-                    response=self.MSG_UNSUPPORTED,
+                    response=_get_message("unsupported", lang),
                     input_type=input_type,
                 )
 
@@ -161,10 +223,11 @@ class MessageProcessor:
             ProcessingResult with NLP response
         """
         text = message.text
+        lang = message.from_user.language_code if message.from_user else None
         if not text:
             return ProcessingResult(
                 status=ProcessingStatus.NO_CONTENT,
-                response=self.ERROR_EMPTY_TEXT,
+                response=_get_message("empty_text", lang),
                 input_type=InputType.TEXT,
             )
 
@@ -210,9 +273,10 @@ class MessageProcessor:
             )
         except Exception as e:
             logger.exception("NLP service error: %s", e)
+            lang = user_info.get("language_code") if user_info else None
             return ProcessingResult(
                 status=ProcessingStatus.ERROR,
-                response=self.ERROR_NLP_FAILED,
+                response=_get_message("nlp_failed", lang),
                 input_type=InputType.TEXT,
                 error=str(e),
             )
@@ -238,10 +302,11 @@ class MessageProcessor:
         elif message.audio:
             file_id = message.audio.file_id
 
+        lang = message.from_user.language_code if message.from_user else None
         if not file_id:
             return ProcessingResult(
                 status=ProcessingStatus.NO_CONTENT,
-                response=self.ERROR_EMPTY_AUDIO,
+                response=_get_message("empty_audio", lang),
                 input_type=InputType.VOICE,
             )
 
@@ -251,7 +316,7 @@ class MessageProcessor:
             if not file.file_path:
                 return ProcessingResult(
                     status=ProcessingStatus.ERROR,
-                    response=self.ERROR_DOWNLOAD_FAILED,
+                    response=_get_message("download_failed", lang),
                     input_type=InputType.VOICE,
                 )
 
@@ -259,7 +324,7 @@ class MessageProcessor:
             if not file_bytes:
                 return ProcessingResult(
                     status=ProcessingStatus.ERROR,
-                    response=self.ERROR_DOWNLOAD_FAILED,
+                    response=_get_message("download_failed", lang),
                     input_type=InputType.VOICE,
                 )
 
@@ -275,7 +340,7 @@ class MessageProcessor:
             if not transcribed_text:
                 return ProcessingResult(
                     status=ProcessingStatus.ERROR,
-                    response=self.ERROR_ASR_FAILED,
+                    response=_get_message("asr_failed", lang),
                     input_type=InputType.VOICE,
                 )
 
@@ -306,7 +371,7 @@ class MessageProcessor:
             logger.exception("Audio processing error: %s", e)
             return ProcessingResult(
                 status=ProcessingStatus.ERROR,
-                response=self.ERROR_ASR_FAILED,
+                response=_get_message("asr_failed", lang),
                 input_type=InputType.VOICE,
                 error=str(e),
             )
@@ -325,10 +390,11 @@ class MessageProcessor:
         Returns:
             ProcessingResult with OCR extracted text and NLP response
         """
+        lang = message.from_user.language_code if message.from_user else None
         if not message.photo:
             return ProcessingResult(
                 status=ProcessingStatus.NO_CONTENT,
-                response=self.ERROR_OCR_FAILED,
+                response=_get_message("ocr_failed", lang),
                 input_type=InputType.PHOTO,
             )
 
@@ -340,7 +406,7 @@ class MessageProcessor:
             if not file.file_path:
                 return ProcessingResult(
                     status=ProcessingStatus.ERROR,
-                    response=self.ERROR_DOWNLOAD_FAILED,
+                    response=_get_message("download_failed", lang),
                     input_type=InputType.PHOTO,
                 )
 
@@ -348,7 +414,7 @@ class MessageProcessor:
             if not file_bytes:
                 return ProcessingResult(
                     status=ProcessingStatus.ERROR,
-                    response=self.ERROR_DOWNLOAD_FAILED,
+                    response=_get_message("download_failed", lang),
                     input_type=InputType.PHOTO,
                 )
 
@@ -366,7 +432,7 @@ class MessageProcessor:
                 # No text found in image, just acknowledge
                 return ProcessingResult(
                     status=ProcessingStatus.SUCCESS,
-                    response="He recibido tu imagen, pero no encontré texto para procesar.",
+                    response=_get_message("no_text_in_image", lang),
                     input_type=InputType.PHOTO,
                     raw_response=ocr_result,
                 )
@@ -398,7 +464,7 @@ class MessageProcessor:
             logger.exception("Photo processing error: %s", e)
             return ProcessingResult(
                 status=ProcessingStatus.ERROR,
-                response=self.ERROR_OCR_FAILED,
+                response=_get_message("ocr_failed", lang),
                 input_type=InputType.PHOTO,
                 error=str(e),
             )
