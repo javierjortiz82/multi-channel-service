@@ -22,7 +22,9 @@ Example:
 """
 
 import asyncio
+import contextlib
 import os
+import random
 import time
 from typing import Any
 
@@ -46,6 +48,22 @@ HTTP_LIMITS = httpx.Limits(
     max_keepalive_connections=10,
     max_connections=20,
     keepalive_expiry=300.0,  # 5 minutes
+)
+
+# Retry configuration (based on Context7 best practices)
+# HTTPTransport handles ConnectError/ConnectTimeout
+# Manual retry handles WriteError, NetworkError, and 5xx errors
+MAX_RETRIES = 3
+RETRY_BASE_DELAY = 1.0  # seconds
+RETRY_MAX_DELAY = 10.0  # seconds
+RETRY_JITTER = 0.5  # random jitter factor
+
+# Retryable exceptions (WriteError, NetworkError, and base classes)
+RETRYABLE_EXCEPTIONS = (
+    httpx.WriteError,
+    httpx.ReadError,
+    httpx.NetworkError,
+    httpx.RemoteProtocolError,
 )
 
 
@@ -90,16 +108,132 @@ class InternalServiceClient:
         self._client_lock = asyncio.Lock()
 
     async def _get_http_client(self) -> httpx.AsyncClient:
-        """Get or create the persistent HTTP client."""
+        """Get or create the persistent HTTP client.
+
+        Uses HTTPTransport with retries for connection errors (Context7 best practice).
+        """
         if self._http_client is None or self._http_client.is_closed:
             async with self._client_lock:
                 if self._http_client is None or self._http_client.is_closed:
-                    self._http_client = httpx.AsyncClient(
-                        timeout=HTTP_TIMEOUT,
-                        limits=HTTP_LIMITS,
+                    # HTTPTransport with retries handles ConnectError/ConnectTimeout
+                    transport = httpx.AsyncHTTPTransport(
+                        retries=2,  # Retry connection errors twice
                         http2=True,  # HTTP/2 for better multiplexing
                     )
+                    self._http_client = httpx.AsyncClient(
+                        transport=transport,
+                        timeout=HTTP_TIMEOUT,
+                        limits=HTTP_LIMITS,
+                    )
         return self._http_client
+
+    async def _request_with_retry(
+        self,
+        method: str,
+        url: str,
+        headers: dict[str, str],
+        max_retries: int = MAX_RETRIES,
+        **kwargs: Any,
+    ) -> httpx.Response:
+        """Execute HTTP request with retry logic for transient errors.
+
+        Implements exponential backoff with jitter for WriteError, NetworkError,
+        and 5xx server errors (Context7 best practice for resilient HTTP clients).
+
+        Args:
+            method: HTTP method (GET, POST, etc.)
+            url: Request URL
+            headers: Request headers
+            max_retries: Maximum number of retry attempts
+            **kwargs: Additional arguments for httpx request
+
+        Returns:
+            httpx.Response object
+
+        Raises:
+            httpx.HTTPStatusError: If request fails after all retries
+            httpx.RequestError: If network error persists after all retries
+        """
+        client = await self._get_http_client()
+        last_exception: Exception | None = None
+
+        for attempt in range(max_retries + 1):
+            try:
+                response = await client.request(method, url, headers=headers, **kwargs)
+
+                # Retry on 5xx server errors (except 501 Not Implemented)
+                is_retryable_5xx = (
+                    response.status_code >= 500
+                    and response.status_code != 501
+                    and attempt < max_retries
+                )
+                if is_retryable_5xx:
+                    delay = self._calculate_retry_delay(attempt)
+                    logger.warning(
+                        "Server error %d, retrying in %.1fs (attempt %d/%d)",
+                        response.status_code,
+                        delay,
+                        attempt + 1,
+                        max_retries,
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+
+                return response
+
+            except RETRYABLE_EXCEPTIONS as e:
+                last_exception = e
+                if attempt < max_retries:
+                    delay = self._calculate_retry_delay(attempt)
+                    logger.warning(
+                        "%s error, retrying in %.1fs (attempt %d/%d): %s",
+                        type(e).__name__,
+                        delay,
+                        attempt + 1,
+                        max_retries,
+                        str(e)[:100],
+                    )
+                    await asyncio.sleep(delay)
+                    # Reset HTTP client on network errors to get fresh connection
+                    await self._reset_http_client()
+                else:
+                    logger.error(
+                        "%s error after %d retries: %s",
+                        type(e).__name__,
+                        max_retries,
+                        str(e),
+                    )
+                    raise
+
+        # Should not reach here, but just in case
+        if last_exception:
+            raise last_exception
+        raise RuntimeError("Unexpected state in retry loop")
+
+    def _calculate_retry_delay(self, attempt: int) -> float:
+        """Calculate delay with exponential backoff and jitter.
+
+        Args:
+            attempt: Current attempt number (0-indexed)
+
+        Returns:
+            Delay in seconds
+        """
+        # Exponential backoff: base * 2^attempt
+        delay: float = RETRY_BASE_DELAY * (2**attempt)
+        # Add random jitter
+        jitter: float = delay * RETRY_JITTER * random.random()
+        delay = delay + jitter
+        # Cap at max delay
+        return float(min(delay, RETRY_MAX_DELAY))
+
+    async def _reset_http_client(self) -> None:
+        """Reset HTTP client to get fresh connections after network errors."""
+        async with self._client_lock:
+            if self._http_client is not None:
+                with contextlib.suppress(Exception):
+                    await self._http_client.aclose()
+                self._http_client = None
 
     def _fetch_token_sync(self, audience: str) -> str:
         """Synchronously fetch identity token (runs in thread pool).
@@ -238,14 +372,14 @@ class InternalServiceClient:
         )
         start = time.perf_counter()
 
-        client = await self._get_http_client()
-        response = await client.post(
+        response = await self._request_with_retry(
+            "POST",
             f"{self.nlp_url}/api/v1/process",
             headers=headers,
             json=payload,
         )
         response.raise_for_status()
-        result = response.json()
+        result: dict[str, Any] = response.json()
 
         elapsed = (time.perf_counter() - start) * 1000
         logger.info(
@@ -291,15 +425,15 @@ class InternalServiceClient:
 
         logger.info("Calling ASR service with audio file: %s", filename)
 
-        client = await self._get_http_client()
-        response = await client.post(
+        response = await self._request_with_retry(
+            "POST",
             f"{self.asr_url}/transcribe",
             headers=headers,
             files={"audio_file": (filename, audio_content, "audio/ogg")},
             data=form_data,
         )
         response.raise_for_status()
-        result = response.json()
+        result: dict[str, Any] = response.json()
         transcription = result.get("data", {}).get("transcription", "")
         logger.info(
             "ASR service transcribed: %s", transcription[:50] if transcription else ""
@@ -311,6 +445,7 @@ class InternalServiceClient:
         file_content: bytes,
         filename: str,
         mime_type: str = "image/jpeg",
+        client_id: str = "telegram-bot",
     ) -> dict[str, Any]:
         """Call the OCR service to extract text from an image.
 
@@ -318,6 +453,7 @@ class InternalServiceClient:
             file_content: Binary content of the image file
             filename: Name of the file
             mime_type: MIME type of the file
+            client_id: Client identifier for tracking
 
         Returns:
             OCR extraction response with extracted text
@@ -330,14 +466,15 @@ class InternalServiceClient:
 
         logger.info("Calling OCR service with file: %s", filename)
 
-        client = await self._get_http_client()
-        response = await client.post(
-            f"{self.ocr_url}/ocr",
+        response = await self._request_with_retry(
+            "POST",
+            f"{self.ocr_url}/ocr/upload",
             headers=headers,
             files={"file": (filename, file_content, mime_type)},
+            data={"client_id": client_id},
         )
         response.raise_for_status()
-        result = response.json()
+        result: dict[str, Any] = response.json()
         logger.info("OCR service extracted text")
         return result
 

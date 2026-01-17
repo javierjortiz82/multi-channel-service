@@ -39,6 +39,7 @@ ERROR_MESSAGES: dict[str, dict[str, str]] = {
         "empty_audio": "No pude obtener el audio del mensaje.",
         "unsupported": "Este tipo de contenido no está soportado aún. Por favor envía texto o audio.",
         "no_text_in_image": "He recibido tu imagen, pero no encontré texto para procesar.",
+        "low_confidence": "No pude entender claramente el audio. Por favor, habla más despacio y claro, o reduce el ruido de fondo.",
     },
     "en": {
         "nlp_failed": "Sorry, there was an error processing your message. Please try again.",
@@ -49,6 +50,7 @@ ERROR_MESSAGES: dict[str, dict[str, str]] = {
         "empty_audio": "I couldn't get the audio from the message.",
         "unsupported": "This content type is not supported yet. Please send text or audio.",
         "no_text_in_image": "I received your image, but I couldn't find any text to process.",
+        "low_confidence": "I couldn't clearly understand the audio. Please speak more slowly and clearly, or reduce background noise.",
     },
     "pt": {
         "nlp_failed": "Desculpe, houve um erro ao processar sua mensagem. Por favor, tente novamente.",
@@ -59,6 +61,7 @@ ERROR_MESSAGES: dict[str, dict[str, str]] = {
         "empty_audio": "Não consegui obter o áudio da mensagem.",
         "unsupported": "Este tipo de conteúdo ainda não é suportado. Por favor, envie texto ou áudio.",
         "no_text_in_image": "Recebi sua imagem, mas não encontrei texto para processar.",
+        "low_confidence": "Não consegui entender claramente o áudio. Por favor, fale mais devagar e claramente, ou reduza o ruído de fundo.",
     },
     "fr": {
         "nlp_failed": "Désolé, une erreur s'est produite lors du traitement de votre message. Veuillez réessayer.",
@@ -69,6 +72,7 @@ ERROR_MESSAGES: dict[str, dict[str, str]] = {
         "empty_audio": "Je n'ai pas pu obtenir l'audio du message.",
         "unsupported": "Ce type de contenu n'est pas encore pris en charge. Veuillez envoyer du texte ou de l'audio.",
         "no_text_in_image": "J'ai reçu votre image, mais je n'ai trouvé aucun texte à traiter.",
+        "low_confidence": "Je n'ai pas pu comprendre clairement l'audio. Veuillez parler plus lentement et clairement, ou réduire le bruit de fond.",
     },
     "ar": {
         "nlp_failed": "عذراً، حدث خطأ أثناء معالجة رسالتك. يرجى المحاولة مرة أخرى.",
@@ -79,10 +83,32 @@ ERROR_MESSAGES: dict[str, dict[str, str]] = {
         "empty_audio": "لم أتمكن من الحصول على الصوت من الرسالة.",
         "unsupported": "هذا النوع من المحتوى غير مدعوم حالياً. يرجى إرسال نص أو صوت.",
         "no_text_in_image": "استلمت صورتك، لكن لم أجد أي نص للمعالجة.",
+        "low_confidence": "لم أتمكن من فهم الصوت بوضوح. يرجى التحدث ببطء ووضوح أكثر، أو تقليل الضوضاء المحيطة.",
     },
 }
 
 DEFAULT_LANGUAGE = "es"
+
+
+def _extract_error_code(error: Exception) -> str | None:
+    """Extract error_code from an HTTP error response.
+
+    Args:
+        error: Exception that may contain error response data.
+
+    Returns:
+        Error code string if found, None otherwise.
+    """
+    import httpx
+
+    if isinstance(error, httpx.HTTPStatusError):
+        try:
+            response_data: dict[str, Any] = error.response.json()
+            error_code: str | None = response_data.get("error_code")
+            return error_code
+        except Exception:
+            pass
+    return None
 
 
 def _get_message(key: str, language_code: str | None) -> str:
@@ -330,11 +356,41 @@ class MessageProcessor:
 
             audio_content = file_bytes.read()
 
-            # Transcribe via ASR (no language_hint to enable auto-detection)
-            asr_result = await self._client.call_asr_service(
-                audio_content=audio_content,
-                filename="voice.ogg",
-            )
+            # Transcribe via ASR (Chirp 2 with auto language detection)
+            try:
+                asr_result = await self._client.call_asr_service(
+                    audio_content=audio_content,
+                    filename="voice.ogg",
+                )
+            except Exception as asr_error:
+                # Check if it's a low confidence error from ASR service
+                error_code = _extract_error_code(asr_error)
+                if error_code == "LOW_CONFIDENCE":
+                    logger.warning("ASR low confidence error: %s", asr_error)
+                    return ProcessingResult(
+                        status=ProcessingStatus.ERROR,
+                        response=_get_message("low_confidence", lang),
+                        input_type=InputType.VOICE,
+                        error=str(asr_error),
+                    )
+                raise
+
+            # Check for error response from ASR
+            if not asr_result.get("success", True):
+                error_code = asr_result.get("error_code", "")
+                if error_code == "LOW_CONFIDENCE":
+                    return ProcessingResult(
+                        status=ProcessingStatus.ERROR,
+                        response=_get_message("low_confidence", lang),
+                        input_type=InputType.VOICE,
+                        raw_response=asr_result,
+                    )
+                return ProcessingResult(
+                    status=ProcessingStatus.ERROR,
+                    response=_get_message("asr_failed", lang),
+                    input_type=InputType.VOICE,
+                    raw_response=asr_result,
+                )
 
             transcribed_text = asr_result.get("data", {}).get("transcription", "")
             if not transcribed_text:
@@ -344,7 +400,15 @@ class MessageProcessor:
                     input_type=InputType.VOICE,
                 )
 
-            logger.info("Audio transcribed: %s", transcribed_text[:100])
+            # Log transcription with detected language
+            detected_lang = asr_result.get("data", {}).get("language", "unknown")
+            confidence = asr_result.get("data", {}).get("confidence", 0)
+            logger.info(
+                "Audio transcribed: %s (lang=%s, conf=%.2f)",
+                transcribed_text[:100],
+                detected_lang,
+                confidence,
+            )
 
             # Process transcribed text via NLP with conversation context
             conversation_id = str(message.chat.id)
@@ -369,6 +433,15 @@ class MessageProcessor:
 
         except Exception as e:
             logger.exception("Audio processing error: %s", e)
+            # Check for low confidence in exception message
+            error_code = _extract_error_code(e)
+            if error_code == "LOW_CONFIDENCE":
+                return ProcessingResult(
+                    status=ProcessingStatus.ERROR,
+                    response=_get_message("low_confidence", lang),
+                    input_type=InputType.VOICE,
+                    error=str(e),
+                )
             return ProcessingResult(
                 status=ProcessingStatus.ERROR,
                 response=_get_message("asr_failed", lang),
@@ -420,11 +493,17 @@ class MessageProcessor:
 
             image_content = file_bytes.read()
 
+            # Build client_id in required format user_id:chat_id
+            user_id = str(message.from_user.id) if message.from_user else "unknown"
+            chat_id = str(message.chat.id)
+            client_id = f"{user_id}:{chat_id}"
+
             # Extract text via OCR
             ocr_result = await self._client.call_ocr_service(
                 file_content=image_content,
                 filename="photo.jpg",
                 mime_type="image/jpeg",
+                client_id=client_id,
             )
 
             extracted_text = ocr_result.get("text", "")
@@ -442,8 +521,20 @@ class MessageProcessor:
             # Process extracted text via NLP with conversation context
             conversation_id = str(message.chat.id)
             user_info = _extract_user_info(message)
+
+            # Build a helpful prompt for the NLP to analyze the OCR text
+            ocr_prompt = (
+                "El usuario ha enviado una imagen y he extraído el siguiente texto de ella:\n\n"
+                f'"""\n{extracted_text}\n"""\n\n'
+                "Por favor, ayuda al usuario interpretando este texto. "
+                "Si es un documento, resume su contenido. "
+                "Si son datos o una lista, organízalos. "
+                "Si es un mensaje o nota, responde apropiadamente. "
+                "Si el texto no tiene sentido o está incompleto, indica qué pudiste identificar."
+            )
+
             nlp_result = await self._client.call_nlp_service(
-                f"Analiza el siguiente texto extraído de una imagen:\n\n{extracted_text}",
+                ocr_prompt,
                 conversation_id=conversation_id,
                 user_info=user_info,
             )
