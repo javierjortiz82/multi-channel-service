@@ -631,7 +631,9 @@ class MessageProcessor:
                         carousel_cards: list[ProductCard] = []
                         for p in products:
                             if p.get("image_url"):
-                                is_exact = p.get("similarity", 0) >= EXACT_MATCH_THRESHOLD
+                                is_exact = (
+                                    p.get("similarity", 0) >= EXACT_MATCH_THRESHOLD
+                                )
                                 carousel_cards.append(
                                     ProductCard(
                                         sku=p.get("sku", "N/A"),
@@ -662,7 +664,9 @@ class MessageProcessor:
                                     "image_search": search_result,
                                     "priority": "exact_match",
                                 },
-                                product_carousel=carousel_cards if carousel_cards else None,
+                                product_carousel=carousel_cards
+                                if carousel_cards
+                                else None,
                             )
 
                         # Similar products found: save carousel for Priority 3
@@ -683,7 +687,9 @@ class MessageProcessor:
             # Combines NLP response with product carousel (if available)
             # =========================================================================
             if result_text:
-                logger.info("Priority 3: Processing object name as user text: %s", result_text)
+                logger.info(
+                    "Priority 3: Processing object name as user text: %s", result_text
+                )
                 text_result = await self.process_text(
                     text=result_text,
                     conversation_id=conversation_id,
