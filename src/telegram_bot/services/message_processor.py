@@ -298,10 +298,14 @@ class MessageProcessor:
         conversation_id = str(message.chat.id)
         # Extract user info for tracking
         user_info = _extract_user_info(message)
+        # Extract language code to pass explicitly to NLP
+        # This ensures the model responds in the user's language
+        user_language = user_info.get("language_code") if user_info else None
         return await self.process_text(
             text,
             conversation_id=conversation_id,
             user_info=user_info,
+            detected_language=user_language,
         )
 
     async def process_text(
@@ -690,10 +694,13 @@ class MessageProcessor:
                 logger.info(
                     "Priority 3: Processing object name as user text: %s", result_text
                 )
+                # Extract user's language to ensure NLP responds in correct language
+                user_language = user_info.get("language_code") if user_info else None
                 text_result = await self.process_text(
                     text=result_text,
                     conversation_id=conversation_id,
                     user_info=user_info,
+                    detected_language=user_language,
                 )
                 # Add carousel if we found similar products
                 if similar_carousel:
