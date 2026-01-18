@@ -40,6 +40,7 @@ ERROR_MESSAGES: dict[str, dict[str, str]] = {
         "unsupported": "Este tipo de contenido no está soportado aún. Por favor envía texto o audio.",
         "no_text_in_image": "He recibido tu imagen, pero no encontré texto para procesar.",
         "low_confidence": "No pude entender claramente el audio. Por favor, habla más despacio y claro, o reduce el ruido de fondo.",
+        "product_not_found": "No encontré productos similares a tu imagen en nuestro catálogo. ¿Puedo ayudarte con algo más?",
     },
     "en": {
         "nlp_failed": "Sorry, there was an error processing your message. Please try again.",
@@ -51,6 +52,7 @@ ERROR_MESSAGES: dict[str, dict[str, str]] = {
         "unsupported": "This content type is not supported yet. Please send text or audio.",
         "no_text_in_image": "I received your image, but I couldn't find any text to process.",
         "low_confidence": "I couldn't clearly understand the audio. Please speak more slowly and clearly, or reduce background noise.",
+        "product_not_found": "I couldn't find similar products in our catalog. Can I help you with something else?",
     },
     "pt": {
         "nlp_failed": "Desculpe, houve um erro ao processar sua mensagem. Por favor, tente novamente.",
@@ -62,6 +64,7 @@ ERROR_MESSAGES: dict[str, dict[str, str]] = {
         "unsupported": "Este tipo de conteúdo ainda não é suportado. Por favor, envie texto ou áudio.",
         "no_text_in_image": "Recebi sua imagem, mas não encontrei texto para processar.",
         "low_confidence": "Não consegui entender claramente o áudio. Por favor, fale mais devagar e claramente, ou reduza o ruído de fundo.",
+        "product_not_found": "Não encontrei produtos semelhantes à sua imagem em nosso catálogo. Posso ajudá-lo com algo mais?",
     },
     "fr": {
         "nlp_failed": "Désolé, une erreur s'est produite lors du traitement de votre message. Veuillez réessayer.",
@@ -73,6 +76,7 @@ ERROR_MESSAGES: dict[str, dict[str, str]] = {
         "unsupported": "Ce type de contenu n'est pas encore pris en charge. Veuillez envoyer du texte ou de l'audio.",
         "no_text_in_image": "J'ai reçu votre image, mais je n'ai trouvé aucun texte à traiter.",
         "low_confidence": "Je n'ai pas pu comprendre clairement l'audio. Veuillez parler plus lentement et clairement, ou réduire le bruit de fond.",
+        "product_not_found": "Je n'ai pas trouvé de produits similaires à votre image dans notre catalogue. Puis-je vous aider avec autre chose?",
     },
     "ar": {
         "nlp_failed": "عذراً، حدث خطأ أثناء معالجة رسالتك. يرجى المحاولة مرة أخرى.",
@@ -84,10 +88,16 @@ ERROR_MESSAGES: dict[str, dict[str, str]] = {
         "unsupported": "هذا النوع من المحتوى غير مدعوم حالياً. يرجى إرسال نص أو صوت.",
         "no_text_in_image": "استلمت صورتك، لكن لم أجد أي نص للمعالجة.",
         "low_confidence": "لم أتمكن من فهم الصوت بوضوح. يرجى التحدث ببطء ووضوح أكثر، أو تقليل الضوضاء المحيطة.",
+        "product_not_found": "لم أجد منتجات مشابهة لصورتك في كتالوجنا. هل يمكنني مساعدتك بشيء آخر؟",
     },
 }
 
 DEFAULT_LANGUAGE = "es"
+
+# Exact match threshold for image search (Google Lens style)
+# Only products with ≥80% similarity are considered "exact matches"
+# Products below this threshold trigger text-based search instead
+EXACT_MATCH_THRESHOLD = 0.80
 
 
 def _extract_error_code(error: Exception) -> str | None:
@@ -137,6 +147,31 @@ class ProcessingStatus(str, Enum):
 
 
 @dataclass
+class ProductCard:
+    """Product card for carousel display.
+
+    Attributes:
+        sku: Product SKU/code
+        name: Product name
+        brand: Product brand
+        description: Product description
+        price: Product price
+        image_url: URL to product image
+        similarity: Match similarity score (0-1)
+        match_type: 'exact' or 'similar'
+    """
+
+    sku: str
+    name: str
+    brand: str | None
+    description: str | None
+    price: float | None
+    image_url: str | None
+    similarity: float
+    match_type: str
+
+
+@dataclass
 class ProcessingResult:
     """Result of message processing.
 
@@ -146,6 +181,7 @@ class ProcessingResult:
         input_type: Type of input that was processed
         raw_response: Raw response from the backend service
         error: Error message if processing failed
+        product_carousel: List of products to display as carousel (optional)
     """
 
     status: ProcessingStatus
@@ -153,6 +189,7 @@ class ProcessingResult:
     input_type: InputType
     raw_response: dict[str, Any] | None = None
     error: str | None = None
+    product_carousel: list[ProductCard] | None = None
 
 
 def _extract_user_info(message: Message) -> dict[str, Any] | None:
@@ -272,6 +309,7 @@ class MessageProcessor:
         text: str,
         conversation_id: str | None = None,
         user_info: dict[str, Any] | None = None,
+        detected_language: str | None = None,
     ) -> ProcessingResult:
         """Process text via NLP service.
 
@@ -279,6 +317,8 @@ class MessageProcessor:
             text: The text to process
             conversation_id: Optional conversation ID for context continuity
             user_info: Optional user information for tracking
+            detected_language: Optional language detected from ASR.
+                Takes priority over user_info.language_code.
 
         Returns:
             ProcessingResult with NLP response
@@ -288,6 +328,7 @@ class MessageProcessor:
                 text,
                 conversation_id=conversation_id,
                 user_info=user_info,
+                detected_language=detected_language,
             )
             response = result.get("response", "")
 
@@ -411,12 +452,14 @@ class MessageProcessor:
             )
 
             # Process transcribed text via NLP with conversation context
+            # Pass detected language from ASR with priority over Telegram language_code
             conversation_id = str(message.chat.id)
             user_info = _extract_user_info(message)
             nlp_result = await self._client.call_nlp_service(
                 transcribed_text,
                 conversation_id=conversation_id,
                 user_info=user_info,
+                detected_language=detected_lang if detected_lang != "unknown" else None,
             )
             response = nlp_result.get("response", "")
 
@@ -498,57 +541,171 @@ class MessageProcessor:
             chat_id = str(message.chat.id)
             client_id = f"{user_id}:{chat_id}"
 
-            # Extract text via OCR
-            ocr_result = await self._client.call_ocr_service(
+            # Analyze image (auto-classifies and routes to OCR or Detection)
+            analyze_result = await self._client.call_analyze_service(
                 file_content=image_content,
                 filename="photo.jpg",
                 mime_type="image/jpeg",
                 client_id=client_id,
             )
 
-            extracted_text = ocr_result.get("text", "")
-            if not extracted_text:
-                # No text found in image, just acknowledge
-                return ProcessingResult(
-                    status=ProcessingStatus.SUCCESS,
-                    response=_get_message("no_text_in_image", lang),
-                    input_type=InputType.PHOTO,
-                    raw_response=ocr_result,
-                )
+            # Extract classification info
+            classification = analyze_result.get("classification", {})
+            predicted_type = classification.get("predicted_type", "unknown")
+            confidence = classification.get("confidence", 0)
+            result_text = analyze_result.get("result", "")
+            image_embedding = analyze_result.get("image_embedding")
+            image_description = analyze_result.get("image_description")
 
-            logger.info("OCR extracted: %s", extracted_text[:100])
+            logger.info(
+                "Image analyzed: type=%s, confidence=%.2f, result=%s, has_embedding=%s",
+                predicted_type,
+                confidence,
+                result_text[:100] if result_text else "empty",
+                image_embedding is not None,
+            )
 
-            # Process extracted text via NLP with conversation context
+            # Build context for conversation
             conversation_id = str(message.chat.id)
             user_info = _extract_user_info(message)
 
-            # Build a helpful prompt for the NLP to analyze the OCR text
-            ocr_prompt = (
-                "El usuario ha enviado una imagen y he extraído el siguiente texto de ella:\n\n"
-                f'"""\n{extracted_text}\n"""\n\n'
-                "Por favor, ayuda al usuario interpretando este texto. "
-                "Si es un documento, resume su contenido. "
-                "Si son datos o una lista, organízalos. "
-                "Si es un mensaje o nota, responde apropiadamente. "
-                "Si el texto no tiene sentido o está incompleto, indica qué pudiste identificar."
-            )
+            # =========================================================================
+            # PRIORITY 1: Document with significant text -> OCR + NLP
+            # =========================================================================
+            if predicted_type == "document" and result_text:
+                logger.info("Priority 1: Processing as document with OCR text")
+                nlp_prompt = (
+                    "El usuario ha enviado una imagen y he extraído el siguiente texto de ella:\n\n"
+                    f'"""\n{result_text}\n"""\n\n'
+                    "Por favor, ayuda al usuario interpretando este texto. "
+                    "Si es un documento, resume su contenido. "
+                    "Si son datos o una lista, organízalos. "
+                    "Si es un mensaje o nota, responde apropiadamente. "
+                    "Si el texto no tiene sentido o está incompleto, indica qué pudiste identificar."
+                )
 
-            nlp_result = await self._client.call_nlp_service(
-                ocr_prompt,
-                conversation_id=conversation_id,
-                user_info=user_info,
-            )
-            response = nlp_result.get("response", "")
+                nlp_result = await self._client.call_nlp_service(
+                    nlp_prompt,
+                    conversation_id=conversation_id,
+                    user_info=user_info,
+                )
 
+                return ProcessingResult(
+                    status=ProcessingStatus.SUCCESS,
+                    response=nlp_result.get("response", ""),
+                    input_type=InputType.PHOTO,
+                    raw_response={
+                        "analyze": analyze_result,
+                        "classification": classification,
+                        "nlp": nlp_result,
+                        "result_text": result_text,
+                        "priority": "document_ocr",
+                    },
+                )
+
+            # =========================================================================
+            # PRIORITY 2: Search products by image similarity
+            # - Exact match (≥80%) → Return immediately with carousel
+            # - Similar products (<80%) → Save carousel for Priority 3
+            # =========================================================================
+            similar_carousel: list[ProductCard] | None = None
+
+            if image_embedding:
+                logger.info("Priority 2: Searching products by image similarity")
+                try:
+                    search_result = await self._client.search_products_by_embedding(
+                        embedding=image_embedding,
+                        limit=5,
+                        max_distance=0.5,  # Broader search to find similar products
+                    )
+
+                    if search_result.get("found") and search_result.get("products"):
+                        products = search_result["products"]
+                        best_similarity = products[0].get("similarity", 0)
+                        logger.info(
+                            "Image search found %d products (best: %.3f)",
+                            len(products),
+                            best_similarity,
+                        )
+
+                        # Build carousel for ALL found products
+                        carousel_cards: list[ProductCard] = []
+                        for p in products:
+                            if p.get("image_url"):
+                                is_exact = p.get("similarity", 0) >= EXACT_MATCH_THRESHOLD
+                                carousel_cards.append(
+                                    ProductCard(
+                                        sku=p.get("sku", "N/A"),
+                                        name=p.get("name", "Producto"),
+                                        brand=p.get("brand"),
+                                        description=p.get("description"),
+                                        price=p.get("price"),
+                                        image_url=p.get("image_url"),
+                                        similarity=p.get("similarity", 0),
+                                        match_type="exact" if is_exact else "similar",
+                                    )
+                                )
+
+                        # Exact match: return immediately
+                        if best_similarity >= EXACT_MATCH_THRESHOLD:
+                            product_name = products[0].get("name", "Producto")
+                            intro_response = (
+                                f"¡Encontré lo que buscas! Aquí tienes: {product_name}."
+                            )
+
+                            return ProcessingResult(
+                                status=ProcessingStatus.SUCCESS,
+                                response=intro_response,
+                                input_type=InputType.PHOTO,
+                                raw_response={
+                                    "analyze": analyze_result,
+                                    "classification": classification,
+                                    "image_search": search_result,
+                                    "priority": "exact_match",
+                                },
+                                product_carousel=carousel_cards if carousel_cards else None,
+                            )
+
+                        # Similar products found: save carousel for Priority 3
+                        if carousel_cards:
+                            similar_carousel = carousel_cards
+                            logger.info(
+                                "Saving %d similar products for carousel (best: %.3f)",
+                                len(carousel_cards),
+                                best_similarity,
+                            )
+
+                except Exception as e:
+                    logger.warning("Image search failed: %s", e)
+                    # Continue to priority 3
+
+            # =========================================================================
+            # PRIORITY 3: Process object name as user text + show similar products
+            # Combines NLP response with product carousel (if available)
+            # =========================================================================
+            if result_text:
+                logger.info("Priority 3: Processing object name as user text: %s", result_text)
+                text_result = await self.process_text(
+                    text=result_text,
+                    conversation_id=conversation_id,
+                    user_info=user_info,
+                )
+                # Add carousel if we found similar products
+                if similar_carousel:
+                    text_result.product_carousel = similar_carousel
+                    text_result.raw_response = {
+                        **(text_result.raw_response or {}),
+                        "priority": "text_with_similar_products",
+                        "similar_count": len(similar_carousel),
+                    }
+                return text_result
+
+            # No content extracted from image
             return ProcessingResult(
                 status=ProcessingStatus.SUCCESS,
-                response=response,
+                response=_get_message("no_text_in_image", lang),
                 input_type=InputType.PHOTO,
-                raw_response={
-                    "ocr": ocr_result,
-                    "nlp": nlp_result,
-                    "extracted_text": extracted_text,
-                },
+                raw_response=analyze_result,
             )
 
         except Exception as e:
