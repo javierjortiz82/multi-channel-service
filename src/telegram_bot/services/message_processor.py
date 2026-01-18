@@ -555,7 +555,6 @@ class MessageProcessor:
             confidence = classification.get("confidence", 0)
             result_text = analyze_result.get("result", "")
             image_embedding = analyze_result.get("image_embedding")
-            image_description = analyze_result.get("image_description")
 
             logger.info(
                 "Image analyzed: type=%s, confidence=%.2f, result=%s, has_embedding=%s",
