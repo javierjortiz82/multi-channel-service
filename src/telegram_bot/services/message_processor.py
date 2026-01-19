@@ -269,29 +269,18 @@ class MessageProcessor:
             response = result.get("response", "")
 
             # Extract structured products from NLP service response
+            # Products are used for media group (carousel with images)
+            # We do NOT append text formatting since Gemini already formats products
             nlp_products = result.get("products")
             products_list: list[Product] | None = None
 
             if nlp_products:
-                # Get user language for formatting
-                user_lang = user_info.get("language_code") if user_info else None
-
                 logger.info(
-                    "NLP returned structured products: count=%d, formatting for display",
+                    "NLP returned structured products: count=%d",
                     len(nlp_products),
                 )
 
-                # Format products for consistent visual display
-                formatted_products = templates.format_nlp_products(
-                    nlp_products,
-                    language_code=user_lang,
-                )
-
-                # Append formatted products to response
-                if formatted_products:
-                    response = f"{response}\n\n{formatted_products}"
-
-                # Convert to Product objects for downstream use
+                # Convert to Product objects for media group use
                 products_list = [
                     Product(
                         sku=p.get("sku", "N/A"),
