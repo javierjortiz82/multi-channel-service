@@ -23,76 +23,9 @@ from aiogram.types import Message
 from telegram_bot.logging_config import get_logger
 from telegram_bot.services.input_classifier import InputType
 from telegram_bot.services.internal_client import get_client
+from telegram_bot.templates import templates
 
 logger = get_logger("message_processor")
-
-# =============================================================================
-# Internationalized Error Messages
-# =============================================================================
-ERROR_MESSAGES: dict[str, dict[str, str]] = {
-    "es": {
-        "nlp_failed": "Lo siento, hubo un error procesando tu mensaje. Por favor intenta de nuevo.",
-        "asr_failed": "No pude transcribir el audio. Por favor intenta de nuevo.",
-        "ocr_failed": "No pude procesar la imagen. Por favor intenta de nuevo.",
-        "download_failed": "No pude descargar el archivo. Por favor intenta de nuevo.",
-        "empty_text": "No recibí ningún texto para procesar.",
-        "empty_audio": "No pude obtener el audio del mensaje.",
-        "unsupported": "Este tipo de contenido no está soportado aún. Por favor envía texto o audio.",
-        "no_text_in_image": "He recibido tu imagen, pero no encontré texto para procesar.",
-        "low_confidence": "No pude entender claramente el audio. Por favor, habla más despacio y claro, o reduce el ruido de fondo.",
-        "product_not_found": "No encontré productos similares a tu imagen en nuestro catálogo. ¿Puedo ayudarte con algo más?",
-    },
-    "en": {
-        "nlp_failed": "Sorry, there was an error processing your message. Please try again.",
-        "asr_failed": "I couldn't transcribe the audio. Please try again.",
-        "ocr_failed": "I couldn't process the image. Please try again.",
-        "download_failed": "I couldn't download the file. Please try again.",
-        "empty_text": "I didn't receive any text to process.",
-        "empty_audio": "I couldn't get the audio from the message.",
-        "unsupported": "This content type is not supported yet. Please send text or audio.",
-        "no_text_in_image": "I received your image, but I couldn't find any text to process.",
-        "low_confidence": "I couldn't clearly understand the audio. Please speak more slowly and clearly, or reduce background noise.",
-        "product_not_found": "I couldn't find similar products in our catalog. Can I help you with something else?",
-    },
-    "pt": {
-        "nlp_failed": "Desculpe, houve um erro ao processar sua mensagem. Por favor, tente novamente.",
-        "asr_failed": "Não consegui transcrever o áudio. Por favor, tente novamente.",
-        "ocr_failed": "Não consegui processar a imagem. Por favor, tente novamente.",
-        "download_failed": "Não consegui baixar o arquivo. Por favor, tente novamente.",
-        "empty_text": "Não recebi nenhum texto para processar.",
-        "empty_audio": "Não consegui obter o áudio da mensagem.",
-        "unsupported": "Este tipo de conteúdo ainda não é suportado. Por favor, envie texto ou áudio.",
-        "no_text_in_image": "Recebi sua imagem, mas não encontrei texto para processar.",
-        "low_confidence": "Não consegui entender claramente o áudio. Por favor, fale mais devagar e claramente, ou reduza o ruído de fundo.",
-        "product_not_found": "Não encontrei produtos semelhantes à sua imagem em nosso catálogo. Posso ajudá-lo com algo mais?",
-    },
-    "fr": {
-        "nlp_failed": "Désolé, une erreur s'est produite lors du traitement de votre message. Veuillez réessayer.",
-        "asr_failed": "Je n'ai pas pu transcrire l'audio. Veuillez réessayer.",
-        "ocr_failed": "Je n'ai pas pu traiter l'image. Veuillez réessayer.",
-        "download_failed": "Je n'ai pas pu télécharger le fichier. Veuillez réessayer.",
-        "empty_text": "Je n'ai reçu aucun texte à traiter.",
-        "empty_audio": "Je n'ai pas pu obtenir l'audio du message.",
-        "unsupported": "Ce type de contenu n'est pas encore pris en charge. Veuillez envoyer du texte ou de l'audio.",
-        "no_text_in_image": "J'ai reçu votre image, mais je n'ai trouvé aucun texte à traiter.",
-        "low_confidence": "Je n'ai pas pu comprendre clairement l'audio. Veuillez parler plus lentement et clairement, ou réduire le bruit de fond.",
-        "product_not_found": "Je n'ai pas trouvé de produits similaires à votre image dans notre catalogue. Puis-je vous aider avec autre chose?",
-    },
-    "ar": {
-        "nlp_failed": "عذراً، حدث خطأ أثناء معالجة رسالتك. يرجى المحاولة مرة أخرى.",
-        "asr_failed": "لم أتمكن من تحويل الصوت إلى نص. يرجى المحاولة مرة أخرى.",
-        "ocr_failed": "لم أتمكن من معالجة الصورة. يرجى المحاولة مرة أخرى.",
-        "download_failed": "لم أتمكن من تحميل الملف. يرجى المحاولة مرة أخرى.",
-        "empty_text": "لم أستلم أي نص للمعالجة.",
-        "empty_audio": "لم أتمكن من الحصول على الصوت من الرسالة.",
-        "unsupported": "هذا النوع من المحتوى غير مدعوم حالياً. يرجى إرسال نص أو صوت.",
-        "no_text_in_image": "استلمت صورتك، لكن لم أجد أي نص للمعالجة.",
-        "low_confidence": "لم أتمكن من فهم الصوت بوضوح. يرجى التحدث ببطء ووضوح أكثر، أو تقليل الضوضاء المحيطة.",
-        "product_not_found": "لم أجد منتجات مشابهة لصورتك في كتالوجنا. هل يمكنني مساعدتك بشيء آخر؟",
-    },
-}
-
-DEFAULT_LANGUAGE = "es"
 
 # Exact match threshold for image search (Google Lens style)
 # Only products with ≥80% similarity are considered "exact matches"
@@ -131,10 +64,7 @@ def _get_message(key: str, language_code: str | None) -> str:
     Returns:
         Localized message string
     """
-    # Handle codes like 'en-US' -> 'en'
-    lang = language_code.split("-")[0].lower() if language_code else DEFAULT_LANGUAGE
-    messages = ERROR_MESSAGES.get(lang, ERROR_MESSAGES[DEFAULT_LANGUAGE])
-    return messages.get(key, ERROR_MESSAGES[DEFAULT_LANGUAGE][key])
+    return templates.render_error(key, language_code)
 
 
 class ProcessingStatus(str, Enum):
@@ -147,8 +77,8 @@ class ProcessingStatus(str, Enum):
 
 
 @dataclass
-class ProductCard:
-    """Product card for carousel display.
+class Product:
+    """Product data for display.
 
     Attributes:
         sku: Product SKU/code
@@ -181,7 +111,7 @@ class ProcessingResult:
         input_type: Type of input that was processed
         raw_response: Raw response from the backend service
         error: Error message if processing failed
-        product_carousel: List of products to display as carousel (optional)
+        products: List of products to display (optional)
     """
 
     status: ProcessingStatus
@@ -189,7 +119,7 @@ class ProcessingResult:
     input_type: InputType
     raw_response: dict[str, Any] | None = None
     error: str | None = None
-    product_carousel: list[ProductCard] | None = None
+    products: list[Product] | None = None
 
 
 def _extract_user_info(message: Message) -> dict[str, Any] | None:
@@ -298,8 +228,8 @@ class MessageProcessor:
         conversation_id = str(message.chat.id)
         # Extract user info for tracking
         user_info = _extract_user_info(message)
-        # Extract language code to pass explicitly to NLP
-        # This ensures the model responds in the user's language
+        # Use Telegram's language_code as fallback for error messages only
+        # Gemini automatically detects and responds in the user's input language
         user_language = user_info.get("language_code") if user_info else None
         return await self.process_text(
             text,
@@ -577,15 +507,7 @@ class MessageProcessor:
             # =========================================================================
             if predicted_type == "document" and result_text:
                 logger.info("Priority 1: Processing as document with OCR text")
-                nlp_prompt = (
-                    "El usuario ha enviado una imagen y he extraído el siguiente texto de ella:\n\n"
-                    f'"""\n{result_text}\n"""\n\n'
-                    "Por favor, ayuda al usuario interpretando este texto. "
-                    "Si es un documento, resume su contenido. "
-                    "Si son datos o una lista, organízalos. "
-                    "Si es un mensaje o nota, responde apropiadamente. "
-                    "Si el texto no tiene sentido o está incompleto, indica qué pudiste identificar."
-                )
+                nlp_prompt = templates.render_document_prompt(result_text)
 
                 nlp_result = await self._client.call_nlp_service(
                     nlp_prompt,
@@ -608,10 +530,10 @@ class MessageProcessor:
 
             # =========================================================================
             # PRIORITY 2: Search products by image similarity
-            # - Exact match (≥80%) → Return immediately with carousel
-            # - Similar products (<80%) → Save carousel for Priority 3
+            # - Exact match (≥80%) → Return immediately
+            # - Similar products (<80%) → Save for Priority 3
             # =========================================================================
-            similar_carousel: list[ProductCard] | None = None
+            similar_products: list[Product] | None = None
 
             if image_embedding:
                 logger.info("Priority 2: Searching products by image similarity")
@@ -623,25 +545,32 @@ class MessageProcessor:
                     )
 
                     if search_result.get("found") and search_result.get("products"):
-                        products = search_result["products"]
-                        best_similarity = products[0].get("similarity", 0)
+                        found_products = search_result["products"]
+                        best_similarity = found_products[0].get("similarity", 0)
                         logger.info(
                             "Image search found %d products (best: %.3f)",
-                            len(products),
+                            len(found_products),
                             best_similarity,
                         )
 
-                        # Build carousel for ALL found products
-                        carousel_cards: list[ProductCard] = []
-                        for p in products:
+                        # Build product list
+                        # Get user language for localized fallback
+                        user_lang = (
+                            user_info.get("language_code") if user_info else None
+                        )
+                        fallback_name = templates.get_product_message(
+                            "product_fallback", user_lang
+                        )
+                        product_list: list[Product] = []
+                        for p in found_products:
                             if p.get("image_url"):
                                 is_exact = (
                                     p.get("similarity", 0) >= EXACT_MATCH_THRESHOLD
                                 )
-                                carousel_cards.append(
-                                    ProductCard(
+                                product_list.append(
+                                    Product(
                                         sku=p.get("sku", "N/A"),
-                                        name=p.get("name", "Producto"),
+                                        name=p.get("name", fallback_name),
                                         brand=p.get("brand"),
                                         description=p.get("description"),
                                         price=p.get("price"),
@@ -653,9 +582,11 @@ class MessageProcessor:
 
                         # Exact match: return immediately
                         if best_similarity >= EXACT_MATCH_THRESHOLD:
-                            product_name = products[0].get("name", "Producto")
-                            intro_response = (
-                                f"¡Encontré lo que buscas! Aquí tienes: {product_name}."
+                            product_name = found_products[0].get("name", fallback_name)
+                            intro_response = templates.get_product_message(
+                                "exact_match_intro",
+                                user_lang,
+                                product_name=product_name,
                             )
 
                             return ProcessingResult(
@@ -668,17 +599,15 @@ class MessageProcessor:
                                     "image_search": search_result,
                                     "priority": "exact_match",
                                 },
-                                product_carousel=carousel_cards
-                                if carousel_cards
-                                else None,
+                                products=product_list if product_list else None,
                             )
 
-                        # Similar products found: save carousel for Priority 3
-                        if carousel_cards:
-                            similar_carousel = carousel_cards
+                        # Similar products found: save for Priority 3
+                        if product_list:
+                            similar_products = product_list
                             logger.info(
-                                "Saving %d similar products for carousel (best: %.3f)",
-                                len(carousel_cards),
+                                "Saving %d similar products (best: %.3f)",
+                                len(product_list),
                                 best_similarity,
                             )
 
@@ -688,7 +617,6 @@ class MessageProcessor:
 
             # =========================================================================
             # PRIORITY 3: Process object name as user text + show similar products
-            # Combines NLP response with product carousel (if available)
             # =========================================================================
             if result_text:
                 logger.info(
@@ -702,13 +630,13 @@ class MessageProcessor:
                     user_info=user_info,
                     detected_language=user_language,
                 )
-                # Add carousel if we found similar products
-                if similar_carousel:
-                    text_result.product_carousel = similar_carousel
+                # Add products if we found similar ones
+                if similar_products:
+                    text_result.products = similar_products
                     text_result.raw_response = {
                         **(text_result.raw_response or {}),
                         "priority": "text_with_similar_products",
-                        "similar_count": len(similar_carousel),
+                        "similar_count": len(similar_products),
                     }
                 return text_result
 

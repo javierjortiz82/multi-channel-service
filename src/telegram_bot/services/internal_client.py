@@ -78,6 +78,7 @@ class InternalServiceClient:
         nlp_service_url: str | None = None,
         asr_service_url: str | None = None,
         ocr_service_url: str | None = None,
+        mcp_service_url: str | None = None,
     ):
         """Initialize the internal service client.
 
@@ -85,6 +86,7 @@ class InternalServiceClient:
             nlp_service_url: URL of nlp-service (or set NLP_SERVICE_URL env)
             asr_service_url: URL of asr-service (or set ASR_SERVICE_URL env)
             ocr_service_url: URL of ocr-service (or set OCR_SERVICE_URL env)
+            mcp_service_url: URL of mcp-server (or set MCP_SERVICE_URL env)
         """
         self.nlp_url = nlp_service_url or os.getenv(
             "NLP_SERVICE_URL",
@@ -97,6 +99,10 @@ class InternalServiceClient:
         self.ocr_url = ocr_service_url or os.getenv(
             "OCR_SERVICE_URL",
             "https://ocr-service-4k3haexkga-uc.a.run.app",
+        )
+        self.mcp_url = mcp_service_url or os.getenv(
+            "MCP_SERVICE_URL",
+            "https://mcp-server-4k3haexkga-uc.a.run.app",
         )
 
         # Token cache: {audience: (token, expiry_time)}
@@ -295,6 +301,7 @@ class InternalServiceClient:
             ("nlp", self.nlp_url),
             ("asr", self.asr_url),
             ("ocr", self.ocr_url),
+            ("mcp", self.mcp_url),
         ]
 
         async def warmup_service(name: str, url: str) -> None:
@@ -332,6 +339,7 @@ class InternalServiceClient:
         text: str,
         conversation_id: str | None = None,
         user_info: dict[str, Any] | None = None,
+        detected_language: str | None = None,
     ) -> dict[str, Any]:
         """Call the NLP service for text processing using Gemini.
 
@@ -346,6 +354,8 @@ class InternalServiceClient:
                 - last_name: User's last name (optional)
                 - username: User's handle (optional)
                 - language_code: User's language (optional)
+            detected_language: Optional language detected from ASR.
+                Takes priority over user_info.language_code.
 
         Returns:
             NLP processing response
@@ -363,12 +373,15 @@ class InternalServiceClient:
             payload["conversation_id"] = conversation_id
         if user_info:
             payload["user"] = user_info
+        if detected_language:
+            payload["detected_language"] = detected_language
 
         logger.info(
-            "Calling NLP service with %d characters, conversation_id=%s, has_user=%s",
+            "Calling NLP service with %d characters, conversation_id=%s, has_user=%s, detected_lang=%s",
             len(text),
             conversation_id,
             user_info is not None,
+            detected_language,
         )
         start = time.perf_counter()
 
@@ -393,14 +406,12 @@ class InternalServiceClient:
         self,
         audio_content: bytes,
         filename: str,
-        language_hint: str | None = None,
     ) -> dict[str, Any]:
         """Call the ASR service to transcribe audio.
 
         Args:
             audio_content: Binary content of the audio file
             filename: Name of the audio file
-            language_hint: Optional language hint (e.g., 'es', 'en')
 
         Returns:
             Transcription response with text and metadata
@@ -420,8 +431,6 @@ class InternalServiceClient:
             "client_id": "telegram-bot",
             "quality_preference": "balanced",
         }
-        if language_hint:
-            form_data["language_hint"] = language_hint
 
         logger.info("Calling ASR service with audio file: %s", filename)
 
@@ -440,14 +449,19 @@ class InternalServiceClient:
         )
         return result
 
-    async def call_ocr_service(
+    async def call_analyze_service(
         self,
         file_content: bytes,
         filename: str,
         mime_type: str = "image/jpeg",
         client_id: str = "telegram-bot",
     ) -> dict[str, Any]:
-        """Call the OCR service to extract text from an image.
+        """Call the analyze service to auto-classify and process an image.
+
+        The analyze endpoint automatically classifies the image and routes it
+        to the appropriate service:
+        - Documents → OCR for text extraction
+        - Objects → Detection for object identification
 
         Args:
             file_content: Binary content of the image file
@@ -456,7 +470,10 @@ class InternalServiceClient:
             client_id: Client identifier for tracking
 
         Returns:
-            OCR extraction response with extracted text
+            Analysis response with:
+            - result: Extracted text or detected object
+            - classification: {predicted_type, confidence}
+            - ocr_result or detection_result depending on type
 
         Raises:
             httpx.HTTPStatusError: If the request fails
@@ -464,18 +481,106 @@ class InternalServiceClient:
         token = await self._get_identity_token(self.ocr_url)
         headers = {"Authorization": f"Bearer {token}"}
 
-        logger.info("Calling OCR service with file: %s", filename)
+        logger.info("Calling analyze service with file: %s", filename)
 
         response = await self._request_with_retry(
             "POST",
-            f"{self.ocr_url}/ocr/upload",
+            f"{self.ocr_url}/analyze/upload",
             headers=headers,
             files={"file": (filename, file_content, mime_type)},
-            data={"client_id": client_id},
+            data={"client_id": client_id, "mode": "auto"},
         )
         response.raise_for_status()
         result: dict[str, Any] = response.json()
-        logger.info("OCR service extracted text")
+
+        # Log classification result
+        classification = result.get("classification", {})
+        predicted_type = classification.get("predicted_type", "unknown")
+        confidence = classification.get("confidence", 0)
+        logger.info(
+            "Analyze service classified as %s (confidence=%.2f)",
+            predicted_type,
+            confidence,
+        )
+        return result
+
+    async def search_products_by_embedding(
+        self,
+        embedding: list[float],
+        limit: int = 5,
+        max_distance: float = 0.5,
+    ) -> dict[str, Any]:
+        """Search products by image embedding similarity (Google Lens style).
+
+        Calls the MCP server's image search endpoint to find products
+        with similar embeddings.
+
+        Args:
+            embedding: 1536-dimensional vector from image embedding.
+            limit: Maximum number of results (default: 5, max: 20).
+            max_distance: Maximum L2 distance for matches (default: 0.5).
+
+        Returns:
+            Search results with format:
+            {
+                "found": bool,
+                "count": int,
+                "products": [
+                    {
+                        "sku": str,
+                        "name": str,
+                        "description": str,
+                        "category": str,
+                        "brand": str,
+                        "price": float,
+                        "image_url": str | None,
+                        "similarity": float
+                    },
+                    ...
+                ]
+            }
+
+        Raises:
+            httpx.HTTPStatusError: If the request fails.
+        """
+        token = await self._get_identity_token(self.mcp_url)
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        }
+
+        payload = {
+            "embedding": embedding,
+            "limit": limit,
+            "max_distance": max_distance,
+        }
+
+        logger.info(
+            "Searching products by embedding (limit=%d, max_distance=%.2f)",
+            limit,
+            max_distance,
+        )
+        start = time.perf_counter()
+
+        response = await self._request_with_retry(
+            "POST",
+            f"{self.mcp_url}/api/v1/image-search",
+            headers=headers,
+            json=payload,
+        )
+        response.raise_for_status()
+        result: dict[str, Any] = response.json()
+
+        elapsed = (time.perf_counter() - start) * 1000
+        found = result.get("found", False)
+        count = result.get("count", 0)
+        logger.info(
+            "Image search completed: found=%s, count=%d in %.0fms",
+            found,
+            count,
+            elapsed,
+        )
+
         return result
 
     async def close(self) -> None:

@@ -203,3 +203,65 @@ Telegram Message → message_processor.py → internal_client.py → NLP Service
 conversation_history_loaded: messages_count=6, conversation_id=5850719087
 unified_template_rendered: has_history=True
 ```
+
+## Image Similarity Search (2026-01-17)
+
+Búsqueda de productos por similitud de imagen estilo Google Lens.
+
+### Arquitectura
+```
+Telegram Photo → OCR Service (classify + embed) → Multi-Channel Service
+                         ↓
+                 image_embedding (if object/mixed)
+                         ↓
+                 MCP Server → pgvector search → Similar products
+                         ↓
+                 NLP Service → Format response → User
+```
+
+### Prioridades de Procesamiento
+1. **Prioridad 1**: Documentos con texto → OCR + NLP
+2. **Prioridad 2**: Imágenes con embedding → Buscar productos similares
+3. **Prioridad 3**: Objetos detectados → Descripción genérica
+
+### Componentes Modificados
+
+| Servicio | Archivo | Cambio |
+|----------|---------|--------|
+| OCR | `app/services/embedding_service.py` | NUEVO - Genera embeddings de imagen |
+| OCR | `app/services/analyzer.py` | Incluye embedding en respuesta |
+| OCR | `app/models/response.py` | Campos `image_embedding`, `image_description` |
+| MCP | `tools/sales/image_search.py` | NUEVO - Búsqueda por vector |
+| MCP | `server.py` | Endpoint `/api/v1/image-search` |
+| MCP | `sql/004_add_image_url.sql` | Migración para `image_url` |
+| Multi-Channel | `services/internal_client.py` | Método `search_products_by_embedding()` |
+| Multi-Channel | `services/message_processor.py` | Lógica de 3 prioridades |
+
+### Environment Variables
+| Variable | Default |
+|----------|---------|
+| `MCP_SERVICE_URL` | `https://mcp-server-4k3haexkga-uc.a.run.app` |
+
+### Respuesta del OCR Service
+```json
+{
+  "result": "keyboard",
+  "classification": {"predicted_type": "object", "confidence": 0.92},
+  "image_embedding": [0.123, -0.456, ...],
+  "image_description": "Black mechanical keyboard with RGB lighting"
+}
+```
+
+### Request al MCP Server
+```bash
+curl -X POST https://mcp-server/api/v1/image-search \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{"embedding": [...], "limit": 5, "max_distance": 0.5}'
+```
+
+### Logs de Verificación
+```
+Image analyzed: type=object, confidence=0.92, has_embedding=True
+Priority 2: Searching products by image similarity
+Image search found 3 products (best similarity: 0.85)
+```

@@ -1002,112 +1002,618 @@ gcloud run services describe multi-channel-service --region=us-central1
 
 ## Intelligent Message Processing
 
-### Arquitectura de Procesamiento
+### Arquitectura General
 
 El bot implementa un sistema de procesamiento inteligente que enruta los mensajes
 a servicios especializados de backend basándose en su tipo.
 
 ```mermaid
-flowchart LR
-    subgraph Input["📨 Input"]
-        MSG["Telegram Message"]
+flowchart TB
+    subgraph Internet["🌐 Internet"]
+        TG["Telegram API"]
     end
 
-    subgraph Classify["📊 Classification"]
-        IC["InputClassifier"]
+    subgraph Gateway["🚪 API Gateway (público)"]
+        GW["multi-channel-gateway\n*.gateway.dev"]
     end
 
-    subgraph Process["🧠 Processing"]
-        MP["MessageProcessor"]
+    subgraph MCS["📱 Multi-Channel Service (IAM)"]
+        WH["Webhook Handler\napp.py:352-427"]
+        IC["InputClassifier\ninput_classifier.py"]
+        MP["MessageProcessor\nmessage_processor.py"]
+        INT["InternalServiceClient\ninternal_client.py"]
     end
 
-    subgraph Services["☁️ Cloud Run Services"]
-        NLP["NLP Service\nGemini 2.0"]
+    subgraph Backend["☁️ Cloud Run Services (IAM)"]
+        NLP["NLP Service\nGemini 2.0 Flash"]
         ASR["ASR Service\nSpeech-to-Text"]
         OCR["OCR Service\nVision API"]
+        MCP["MCP Server\npgvector Search"]
     end
 
-    subgraph Output["💬 Output"]
-        RESP["AI Response"]
+    subgraph Storage["💾 Storage"]
+        PG["PostgreSQL\nnlp_conversation_history"]
     end
 
-    MSG --> IC
+    TG -->|HTTPS POST| GW
+    GW -->|IAM Auth| WH
+    WH --> IC
     IC --> MP
-    MP -->|"Text"| NLP
-    MP -->|"Voice/Audio"| ASR
-    MP -->|"Photo"| OCR
-    ASR -->|"Transcription"| NLP
-    OCR -->|"Extracted Text"| NLP
-    NLP --> RESP
+    MP --> INT
+    INT -->|Text| NLP
+    INT -->|Audio| ASR
+    INT -->|Photo| OCR
+    INT -->|Embedding| MCP
+    ASR -->|Transcription| NLP
+    OCR -->|OCR Text| NLP
+    NLP --> PG
 
-    style MSG fill:#0088cc,color:#fff
+    style TG fill:#0088cc,color:#fff
+    style GW fill:#4285F4,color:#fff
+    style WH fill:#4ecdc4,color:#fff
     style IC fill:#00bcd4,color:#fff
     style MP fill:#9c27b0,color:#fff
+    style INT fill:#ff9800,color:#fff
     style NLP fill:#34A853,color:#fff
     style ASR fill:#EA4335,color:#fff
     style OCR fill:#FBBC04,color:#333
-    style RESP fill:#4CAF50,color:#fff
+    style MCP fill:#673ab7,color:#fff
+    style PG fill:#336791,color:#fff
 ```
 
 ### Componentes del Sistema
 
-| Componente | Archivo | Responsabilidad |
-|------------|---------|-----------------|
-| **InputClassifier** | `input_classifier.py` | Clasificación de tipo de mensaje |
-| **MessageProcessor** | `message_processor.py` | Routing y orquestación de servicios |
-| **InternalClient** | `internal_client.py` | Comunicación IAM service-to-service |
-
-### Flujo de Procesamiento por Tipo
-
-#### Texto
-```
-Message.text → MessageProcessor → NLP Service → Response
-```
-
-#### Audio/Voz
-```
-Message.voice → Download → ASR Service → Transcription → NLP Service → Response
-```
-
-#### Imagen
-```
-Message.photo → Download → OCR Service → Extracted Text → NLP Service → Response
-```
+| Componente | Archivo | Líneas | Responsabilidad |
+|------------|---------|--------|-----------------|
+| **WebhookHandler** | `app.py` | 352-427 | Entrada HTTP, validación, background tasks |
+| **InputClassifier** | `input_classifier.py` | 130-171 | Clasificación de tipo de mensaje |
+| **MessageProcessor** | `message_processor.py` | 232-730 | Routing y orquestación de servicios |
+| **InternalServiceClient** | `internal_client.py` | 76-588 | Comunicación IAM service-to-service |
+| **MessageHandler** | `message_handler.py` | 260-435 | Handlers por tipo de mensaje |
 
 ### Servicios de Backend
 
-| Servicio | Endpoint | Modelo |
-|----------|----------|--------|
-| **NLP Service** | `/api/v1/process` | Gemini 2.0 Flash |
-| **ASR Service** | `/transcribe` | Google Speech-to-Text |
-| **OCR Service** | `/ocr` | Google Vision API |
+| Servicio | URL Base | Endpoint Principal |
+|----------|----------|-------------------|
+| **NLP Service** | `nlp-service-4k3haexkga-uc.a.run.app` | `POST /api/v1/process` |
+| **ASR Service** | `asr-service-4k3haexkga-uc.a.run.app` | `POST /transcribe` |
+| **OCR Service** | `ocr-service-4k3haexkga-uc.a.run.app` | `POST /analyze/upload` |
+| **MCP Server** | `mcp-server-4k3haexkga-uc.a.run.app` | `POST /api/v1/image-search` |
 
-### Autenticación Service-to-Service
+---
+
+## Flujo 1: Mensajes de Texto
+
+### Diagrama de Secuencia
+
+```mermaid
+sequenceDiagram
+    participant U as Usuario
+    participant TG as Telegram
+    participant WH as Webhook
+    participant IC as InputClassifier
+    participant MP as MessageProcessor
+    participant NLP as NLP Service
+    participant PG as PostgreSQL
+
+    U->>TG: Envía mensaje de texto
+    TG->>WH: POST /webhook
+    WH->>WH: Validación (IP, Token, Rate)
+    WH->>IC: classify(message)
+    IC-->>WH: InputType.TEXT
+    WH->>MP: process_message()
+    MP->>MP: _process_text_message()
+    MP->>NLP: call_nlp_service(text, conversation_id)
+    NLP->>PG: Recupera historial (últimos 10 msgs)
+    PG-->>NLP: Contexto de conversación
+    NLP->>NLP: Gemini 2.0 Flash genera respuesta
+    NLP->>PG: Guarda mensaje + respuesta
+    NLP-->>MP: {response, model, lengths}
+    MP-->>WH: ProcessingResult(SUCCESS)
+    WH-->>TG: message.answer(response)
+    TG-->>U: Muestra respuesta
+```
+
+### Archivos Involucrados
+
+| Archivo | Líneas | Función |
+|---------|--------|---------|
+| `app.py` | 352-427 | `webhook_handler()` - entrada HTTP |
+| `message_handler.py` | 348-359 | `handle_text()` - handler específico |
+| `input_classifier.py` | 164-165 | Clasifica como `InputType.TEXT` |
+| `message_processor.py` | 279-309 | `_process_text_message()` |
+| `internal_client.py` | 337-403 | `call_nlp_service()` |
+
+### Request al NLP Service
+
+```json
+{
+  "text": "mensaje del usuario (max 32,000 chars)",
+  "conversation_id": "5850719087",
+  "user": {
+    "channel": "telegram",
+    "external_id": "123456789",
+    "first_name": "Juan",
+    "language_code": "es"
+  },
+  "detected_language": null
+}
+```
+
+### Response del NLP Service
+
+```json
+{
+  "response": "Respuesta generada por Gemini",
+  "model": "gemini-2.0-flash",
+  "input_length": 35,
+  "output_length": 120
+}
+```
+
+---
+
+## Flujo 2: Mensajes de Audio/Voz
+
+### Diagrama de Secuencia
+
+```mermaid
+sequenceDiagram
+    participant U as Usuario
+    participant TG as Telegram
+    participant WH as Webhook
+    participant MP as MessageProcessor
+    participant ASR as ASR Service
+    participant NLP as NLP Service
+
+    U->>TG: Envía audio/voz
+    TG->>WH: POST /webhook
+    WH->>MP: process_message(VOICE/AUDIO)
+    MP->>MP: _process_audio_message()
+    MP->>TG: bot.get_file(file_id)
+    TG-->>MP: file_path
+    MP->>TG: Download audio bytes
+    TG-->>MP: audio_content
+    MP->>ASR: call_asr_service(audio, "voice.ogg")
+
+    alt LOW_CONFIDENCE
+        ASR-->>MP: {error_code: "LOW_CONFIDENCE"}
+        MP-->>WH: "No pude entender el audio..."
+    else SUCCESS
+        ASR-->>MP: {transcription, language, confidence}
+        MP->>NLP: call_nlp_service(transcription, detected_language)
+        NLP-->>MP: {response}
+        MP-->>WH: ProcessingResult(SUCCESS)
+    end
+
+    WH-->>TG: message.answer(response)
+    TG-->>U: Muestra respuesta
+```
+
+### Archivos Involucrados
+
+| Archivo | Líneas | Función |
+|---------|--------|---------|
+| `message_handler.py` | 362-374 | `handle_voice()` |
+| `message_handler.py` | 376-387 | `handle_audio()` |
+| `message_processor.py` | 355-497 | `_process_audio_message()` |
+| `internal_client.py` | 405-454 | `call_asr_service()` |
+
+### Request al ASR Service (multipart/form-data)
+
+```
+client_id: "telegram-bot"
+quality_preference: "balanced"
+language_hint: "es" (opcional)
+audio_file: voice.ogg (binary)
+```
+
+### Response del ASR Service
+
+```json
+{
+  "success": true,
+  "data": {
+    "transcription": "Hola, ¿cómo estás?",
+    "confidence": 0.95,
+    "language": "es",
+    "duration": 2.5
+  }
+}
+```
+
+### Manejo de Errores
+
+| Error Code | Acción | Mensaje Usuario |
+|------------|--------|-----------------|
+| `LOW_CONFIDENCE` | Retorna inmediatamente | "No pude entender claramente el audio..." |
+| `success: false` | Log + mensaje error | "No pude transcribir el audio..." |
+
+**Nota**: El `detected_language` del ASR tiene **prioridad** sobre `user.language_code` al llamar al NLP.
+
+---
+
+## Flujo 3: Mensajes de Foto/Imagen
+
+### Sistema de 3 Prioridades
+
+```mermaid
+flowchart TB
+    subgraph Input["📷 Entrada"]
+        PHOTO["Foto de Telegram"]
+    end
+
+    subgraph Download["⬇️ Descarga"]
+        DL["Download largest size"]
+    end
+
+    subgraph OCR["🔍 OCR Service"]
+        ANALYZE["POST /analyze/upload"]
+        CLASS["Classification:\ndocument | object | mixed"]
+    end
+
+    subgraph Priority["⚡ Sistema de Prioridades"]
+        P1["PRIORIDAD 1\n📄 Documento con texto"]
+        P2["PRIORIDAD 2\n🔎 Búsqueda por embedding"]
+        P3["PRIORIDAD 3\n🏷️ Objeto + NLP"]
+    end
+
+    subgraph Services["☁️ Servicios"]
+        NLP["NLP Service"]
+        MCP["MCP Server\n/api/v1/image-search"]
+    end
+
+    subgraph Output["📤 Respuesta"]
+        TEXT["Respuesta texto"]
+        CAROUSEL["Carrusel productos"]
+    end
+
+    PHOTO --> DL
+    DL --> ANALYZE
+    ANALYZE --> CLASS
+
+    CLASS -->|"type=document\n+ tiene texto"| P1
+    CLASS -->|"has embedding"| P2
+    CLASS -->|"has result_text"| P3
+
+    P1 -->|"OCR text"| NLP
+    P2 -->|"embedding vector"| MCP
+    P3 -->|"object name"| NLP
+
+    MCP -->|"similarity ≥ 80%"| CAROUSEL
+    MCP -->|"similarity < 80%"| P3
+
+    NLP --> TEXT
+    P3 --> TEXT
+    P3 -.->|"si hay similares"| CAROUSEL
+
+    style PHOTO fill:#0088cc,color:#fff
+    style DL fill:#4ecdc4,color:#fff
+    style ANALYZE fill:#FBBC04,color:#333
+    style CLASS fill:#ff9800,color:#fff
+    style P1 fill:#e74c3c,color:#fff
+    style P2 fill:#9c27b0,color:#fff
+    style P3 fill:#3f51b5,color:#fff
+    style NLP fill:#34A853,color:#fff
+    style MCP fill:#673ab7,color:#fff
+    style TEXT fill:#27ae60,color:#fff
+    style CAROUSEL fill:#00bcd4,color:#fff
+```
+
+### Archivos Involucrados
+
+| Archivo | Líneas | Función |
+|---------|--------|---------|
+| `message_handler.py` | 390-421 | `handle_photo()` |
+| `message_processor.py` | 499-730 | `_process_photo_message()` |
+| `internal_client.py` | 456-509 | `call_analyze_service()` |
+| `internal_client.py` | 511-588 | `search_products_by_embedding()` |
+
+### Detalle de Prioridades
+
+#### PRIORIDAD 1: Documento con Texto (líneas 578-607)
+```
+Condición: predicted_type == "document" AND result_text existe
+Acción: Envía texto OCR al NLP con prompt contextual
+Resultado: Respuesta de texto interpretando el documento
+```
+
+#### PRIORIDAD 2: Búsqueda Visual por Embedding (líneas 614-688)
+```
+Condición: image_embedding existe
+Acción: Busca productos similares en pgvector
+Resultado:
+  - similarity ≥ 0.80: Match exacto → Carrusel inmediato
+  - similarity < 0.80: Guarda para Prioridad 3
+```
+
+#### PRIORIDAD 3: Objeto + NLP (líneas 693-713)
+```
+Condición: result_text existe (nombre del objeto)
+Acción: Procesa nombre como texto + adjunta carrusel si existe
+Resultado: Respuesta NLP + productos similares opcionales
+```
+
+### Request al OCR Service (multipart/form-data)
+
+```
+client_id: "user_id:chat_id"
+mode: "auto"
+file: photo.jpg (binary)
+```
+
+### Response del OCR Service (Objeto)
+
+```json
+{
+  "result": "keyboard",
+  "classification": {
+    "predicted_type": "object",
+    "confidence": 0.92
+  },
+  "image_embedding": [0.123, -0.456, ...],
+  "image_description": "Black mechanical keyboard with RGB"
+}
+```
+
+### Response del OCR Service (Documento)
+
+```json
+{
+  "result": "Factura #12345\nTotal: $250.00",
+  "classification": {
+    "predicted_type": "document",
+    "confidence": 0.98
+  },
+  "ocr_result": {
+    "text": "Factura #12345\nTotal: $250.00",
+    "confidence": 0.98
+  }
+}
+```
+
+### Request al MCP Server (Búsqueda por Embedding)
+
+```json
+{
+  "embedding": [0.123, -0.456, ...],
+  "limit": 5,
+  "max_distance": 0.5
+}
+```
+
+### Response del MCP Server
+
+```json
+{
+  "found": true,
+  "count": 3,
+  "products": [
+    {
+      "sku": "TECH-001",
+      "name": "Mechanical Keyboard RGB",
+      "brand": "Logitech",
+      "price": 149.99,
+      "image_url": "https://...",
+      "similarity": 0.89
+    }
+  ]
+}
+```
+
+---
+
+## Flujo 4: Documentos (No Procesados)
+
+### Estado Actual
+
+```
+Condición: InputType.DOCUMENT
+Acción: Log only, no procesamiento
+Resultado: ProcessingStatus.UNSUPPORTED
+Mensaje: "Tipo de mensaje no soportado"
+```
+
+| Archivo | Líneas | Función |
+|---------|--------|---------|
+| `message_handler.py` | 343-345 | Handler registrado (solo log) |
+| `message_processor.py` | 274-276 | Retorna `UNSUPPORTED` |
+
+---
+
+## Memoria de Conversación
+
+### Arquitectura
+
+```mermaid
+flowchart LR
+    subgraph Telegram
+        MSG["Message\nchat.id = 5850719087"]
+    end
+
+    subgraph MCS["Multi-Channel Service"]
+        MP["MessageProcessor\nconversation_id = chat_id"]
+        INT["InternalClient\npayload.conversation_id"]
+    end
+
+    subgraph NLP["NLP Service"]
+        PROC["Processor"]
+        HIST["History Retrieval\nLast 10 messages"]
+    end
+
+    subgraph DB["PostgreSQL"]
+        TABLE["nlp_conversation_history\n- conversation_id\n- role (user/assistant)\n- content\n- timestamp"]
+    end
+
+    MSG -->|chat_id| MP
+    MP -->|conversation_id| INT
+    INT -->|conversation_id| PROC
+    PROC -->|SELECT| HIST
+    HIST -->|conversation_id| TABLE
+    TABLE -->|historial| HIST
+    HIST -->|context| PROC
+    PROC -->|INSERT| TABLE
+
+    style MSG fill:#0088cc,color:#fff
+    style MP fill:#9c27b0,color:#fff
+    style INT fill:#ff9800,color:#fff
+    style PROC fill:#34A853,color:#fff
+    style HIST fill:#4CAF50,color:#fff
+    style TABLE fill:#336791,color:#fff
+```
+
+### Puntos de Paso del conversation_id
+
+| Flujo | Archivo | Línea | Código |
+|-------|---------|-------|--------|
+| Texto | message_processor.py | 298 | `conversation_id = str(message.chat.id)` |
+| Audio | message_processor.py | 460 | `conversation_id = str(message.chat.id)` |
+| Foto | message_processor.py | 572 | `conversation_id = str(message.chat.id)` |
+
+### Configuración de Historial
+
+- **Mensajes recuperados**: Últimos 10 (5 turnos user/assistant)
+- **Expiración**: 24 horas
+- **Tabla**: `test.nlp_conversation_history`
+
+---
+
+## Autenticación Service-to-Service
+
+### Token IAM (internal_client.py:258-289)
 
 ```python
-# Obtención automática de token IAM
-def _get_identity_token(self, audience: str) -> str:
-    request = google.auth.transport.requests.Request()
-    token = id_token.fetch_id_token(request, audience)
+async def _get_identity_token(self, audience: str) -> str:
+    """Obtiene token IAM con cache de 50 minutos."""
+    cached = self._token_cache.get(audience)
+    if cached:
+        token, expiry = cached
+        if time.time() < expiry:
+            return token
+
+    token = await asyncio.to_thread(
+        _fetch_token_sync, audience
+    )
+    self._token_cache[audience] = (token, time.time() + TOKEN_CACHE_TTL)
     return token
 ```
 
-### Códigos de Estado de Procesamiento
+### Configuración HTTP (internal_client.py:116-134)
 
-| Estado | Descripción |
-|--------|-------------|
-| `SUCCESS` | Mensaje procesado correctamente |
-| `ERROR` | Error en el procesamiento |
-| `UNSUPPORTED` | Tipo de mensaje no soportado |
-| `NO_CONTENT` | Mensaje sin contenido procesable |
+| Parámetro | Valor | Descripción |
+|-----------|-------|-------------|
+| `connect` | 10s | Timeout de conexión |
+| `read` | 60s | Timeout de lectura |
+| `write` | 10s | Timeout de escritura |
+| `max_connections` | 20 | Pool máximo |
+| `keepalive` | 10 | Conexiones persistentes |
+| `http2` | true | Multiplexing habilitado |
 
-### Variables de Entorno para Servicios
+### Retry Logic (internal_client.py:136-234)
+
+| Parámetro | Valor |
+|-----------|-------|
+| `MAX_RETRIES` | 3 |
+| `RETRY_BASE_DELAY` | 1.0s |
+| `RETRY_MAX_DELAY` | 10.0s |
+| `RETRY_JITTER` | ±50% |
+| **Retryable** | 5xx (excepto 501), WriteError, NetworkError |
+
+---
+
+## Manejo de Errores e Internacionalización
+
+### Idiomas Soportados
+
+| Código | Idioma | Default |
+|--------|--------|---------|
+| `es` | Español | ✅ |
+| `en` | English | |
+| `pt` | Português | |
+| `fr` | Français | |
+| `ar` | العربية | |
+
+### Mensajes de Error (message_processor.py:32-93)
+
+| Clave | Español | Uso |
+|-------|---------|-----|
+| `nlp_failed` | "Lo siento, hubo un error procesando..." | Error en NLP Service |
+| `asr_failed` | "No pude transcribir el audio..." | Error en ASR Service |
+| `ocr_failed` | "No pude procesar la imagen..." | Error en OCR Service |
+| `low_confidence` | "No pude entender claramente el audio..." | ASR con baja confianza |
+| `product_not_found` | "No encontré productos similares..." | Búsqueda sin resultados |
+| `unsupported` | "Tipo de mensaje no soportado" | Tipo no implementado |
+
+### Resolución de Idioma (message_processor.py:124-137)
+
+```python
+def _get_user_language(user: User | None) -> str:
+    if user and user.language_code:
+        # "en-US" → "en"
+        lang = user.language_code.split("-")[0].lower()
+        if lang in SUPPORTED_LANGUAGES:
+            return lang
+    return DEFAULT_LANGUAGE  # "es"
+```
+
+---
+
+## Códigos de Estado de Procesamiento
+
+| Estado | Descripción | Ejemplo |
+|--------|-------------|---------|
+| `SUCCESS` | Procesado correctamente | Respuesta de NLP recibida |
+| `ERROR` | Error en backend | Timeout, 5xx, excepción |
+| `UNSUPPORTED` | Tipo no soportado | Documento, video, sticker |
+| `NO_CONTENT` | Sin contenido | Mensaje vacío |
+
+### ProcessingResult Dataclass
+
+```python
+@dataclass
+class ProcessingResult:
+    status: ProcessingStatus
+    response: str
+    input_type: InputType
+    raw_response: dict | None = None
+    error: str | None = None
+    product_carousel: list[ProductCard] | None = None
+```
+
+---
+
+## Variables de Entorno para Servicios
 
 | Variable | Descripción | Default |
 |----------|-------------|---------|
-| `NLP_SERVICE_URL` | URL del servicio NLP | `nlp-service-*.run.app` |
-| `ASR_SERVICE_URL` | URL del servicio ASR | `asr-service-*.run.app` |
-| `OCR_SERVICE_URL` | URL del servicio OCR | `ocr-service-*.run.app` |
+| `NLP_SERVICE_URL` | URL del servicio NLP | `https://nlp-service-4k3haexkga-uc.a.run.app` |
+| `ASR_SERVICE_URL` | URL del servicio ASR | `https://asr-service-4k3haexkga-uc.a.run.app` |
+| `OCR_SERVICE_URL` | URL del servicio OCR | `https://ocr-service-4k3haexkga-uc.a.run.app` |
+| `MCP_SERVICE_URL` | URL del MCP Server | `https://mcp-server-4k3haexkga-uc.a.run.app` |
+
+---
+
+## Logs de Verificación
+
+### Texto
+```
+nlp_service_called: text_length=35, has_conversation_id=True
+conversation_history_loaded: messages_count=6, conversation_id=5850719087
+```
+
+### Audio
+```
+asr_service_called: filename=voice.ogg
+transcription_success: confidence=0.95, language=es
+nlp_service_called: detected_language=es
+```
+
+### Foto
+```
+image_analyzed: type=object, confidence=0.92, has_embedding=True
+image_search_called: limit=5, max_distance=0.5
+image_search_found: count=3, best_similarity=0.89
+```
 
 ---
 
@@ -1119,12 +1625,14 @@ Docker y las mejores prácticas modernas de ingeniería, con énfasis en
 seguridad avanzada, alta concurrencia, logging robusto, configuración flexible
 y procesamiento inteligente de mensajes con servicios de IA.
 
-**Versión**: 1.3.0
-**Última actualización**: 2025-12-31
-**Variables de configuración**: 31
+**Versión**: 1.4.0
+**Última actualización**: 2026-01-18
+**Variables de configuración**: 35
 **Endpoints**: 2 (`/webhook`, `/health`)
 **Bot Commands**: 2 (`/start`, `/help`)
-**Input Types**: 16
+**Input Types**: 16 (4 procesados activamente: TEXT, VOICE, AUDIO, PHOTO)
 **Security Layers**: 5 (Rate Limit, IP Filter, Token, JSON, Update)
 **Deployment**: Cloud Run with IAM + orchestrator-sa + API Gateway
-**AI Services**: NLP (Gemini), ASR (Speech-to-Text), OCR (Vision)
+**AI Services**: NLP (Gemini 2.0), ASR (Speech-to-Text), OCR (Vision), MCP (pgvector)
+**Conversation Memory**: PostgreSQL con historial de 10 mensajes por chat_id
+**Image Search**: Sistema de 3 prioridades con embeddings y búsqueda vectorial

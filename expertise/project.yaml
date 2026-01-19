@@ -3,7 +3,7 @@
 # =============================================================================
 # Este archivo contiene el conocimiento acumulado del proyecto.
 # Claude lee esta expertise al inicio de cada sesión.
-# Actualizado: 2026-01-16
+# Actualizado: 2026-01-18
 # =============================================================================
 
 project:
@@ -42,8 +42,8 @@ architecture:
       role: Extracción de texto de imágenes
 
   message_routing:
-    TEXT: NLP Service
-    VOICE/AUDIO: ASR Service → NLP Service
+    TEXT: NLP Service (Gemini auto-detects language)
+    VOICE/AUDIO: ASR Service (auto-detect language) → NLP Service
     PHOTO: OCR Service → NLP Service
 
 # =============================================================================
@@ -53,6 +53,8 @@ key_files:
   message_processor: src/telegram_bot/services/message_processor.py
   internal_client: src/telegram_bot/services/internal_client.py
   input_classifier: src/telegram_bot/services/input_classifier.py
+  message_handler: src/telegram_bot/bot/handlers/message_handler.py
+  templates: src/telegram_bot/templates/  # Jinja2 templates for i18n
   dockerfile: deploy/Dockerfile.cloudrun
   cloudbuild: cloudbuild.yaml
 
@@ -133,6 +135,43 @@ lessons_learned:
     root_cause: "Faltaba secret_token en la configuración del webhook"
     solution: "Incluir &secret_token=... en el setWebhook URL"
 
+  - id: jinja2_templates_i18n
+    date: 2026-01-18
+    problem: "Strings hardcodeados en Python dificultaban mantenimiento e i18n"
+    root_cause: |
+      ERROR_MESSAGES dict con 60+ strings, START_MESSAGE/HELP_MESSAGE,
+      prompts NLP, y formatos de producto todos hardcodeados en Python.
+    solution: |
+      Extraer todos los strings a templates Jinja2:
+      - templates/messages/errors/{es,en,pt,fr,ar}.j2 - Errores i18n
+      - templates/messages/commands/{start,help}.j2 - Comandos
+      - templates/products/{card,text_list,carousel_caption,_macros}.j2
+      - templates/prompts/document_analysis.j2 - NLP prompts
+      Usar TemplateManager singleton con filtros: escape_html, format_price, format_percent, truncate_text
+    files_affected:
+      - src/telegram_bot/templates/__init__.py (nuevo)
+      - src/telegram_bot/services/message_processor.py
+      - src/telegram_bot/bot/handlers/message_handler.py
+      - pyproject.toml (jinja2>=3.1.0)
+
+  - id: text_language_detection
+    date: 2026-01-18
+    problem: "langdetect era redundante - Gemini ya auto-detecta idioma"
+    root_cause: |
+      langdetect fallaba para textos cortos (<10 chars), que son muy comunes en Telegram.
+      Gemini 2.5 detecta automáticamente el idioma del input con 99%+ precisión.
+      La detección local era redundante y agregaba complejidad sin beneficio real.
+    solution: |
+      Eliminar langdetect y confiar en Gemini para detección de idioma:
+      - Gemini responde automáticamente en el idioma del input del usuario
+      - Telegram language_code se usa solo como fallback para mensajes de error
+      - Arquitectura simplificada: menos código, mejor mantenibilidad
+      - Precisión mejorada para textos cortos (Gemini maneja "Hola", "Hi", etc.)
+    files_affected:
+      - pyproject.toml (removed langdetect)
+      - src/telegram_bot/services/message_processor.py
+      - src/telegram_bot/tests/test_message_processor.py
+
 # =============================================================================
 # Patrones y Convenciones
 # =============================================================================
@@ -161,6 +200,20 @@ patterns:
   logging:
     style: structlog
     format: "timestamp | level | message | key=value"
+
+  templates:
+    engine: Jinja2
+    location: src/telegram_bot/templates/
+    usage: |
+      from telegram_bot.templates import templates
+      templates.render_error("nlp_failed", "es")  # Error i18n
+      templates.render_command("start")           # Command response
+      templates.render_product_list(products, has_exact_match=True)
+      templates.render_carousel_caption(product, is_exact=True)
+      templates.render_document_prompt(extracted_text)
+    add_new_language: |
+      1. Create templates/messages/errors/{lang}.j2
+      2. Add language code to TemplateManager.SUPPORTED_LANGUAGES
 
 # =============================================================================
 # Comandos Frecuentes

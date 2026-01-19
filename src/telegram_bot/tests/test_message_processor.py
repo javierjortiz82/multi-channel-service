@@ -11,7 +11,7 @@ from telegram_bot.services.message_processor import (
     MessageProcessor,
     ProcessingResult,
     ProcessingStatus,
-    ProductCard,
+    Product,
 )
 
 
@@ -166,12 +166,12 @@ def mock_photo_message() -> MagicMock:
     return message
 
 
-class TestProductCard:
-    """Tests for ProductCard dataclass."""
+class TestProduct:
+    """Tests for Product dataclass."""
 
-    def test_product_card_creation(self) -> None:
-        """Test creating a product card."""
-        card = ProductCard(
+    def test_product_creation(self) -> None:
+        """Test creating a product."""
+        product = Product(
             sku="TECH-001",
             name="Mechanical Keyboard",
             brand="Logitech",
@@ -181,16 +181,16 @@ class TestProductCard:
             similarity=0.85,
             match_type="exact",
         )
-        assert card.sku == "TECH-001"
-        assert card.name == "Mechanical Keyboard"
-        assert card.brand == "Logitech"
-        assert card.price == 149.99
-        assert card.similarity == 0.85
-        assert card.match_type == "exact"
+        assert product.sku == "TECH-001"
+        assert product.name == "Mechanical Keyboard"
+        assert product.brand == "Logitech"
+        assert product.price == 149.99
+        assert product.similarity == 0.85
+        assert product.match_type == "exact"
 
-    def test_product_card_optional_fields(self) -> None:
-        """Test product card with optional fields as None."""
-        card = ProductCard(
+    def test_product_optional_fields(self) -> None:
+        """Test product with optional fields as None."""
+        product = Product(
             sku="TECH-002",
             name="Basic Keyboard",
             brand=None,
@@ -200,9 +200,9 @@ class TestProductCard:
             similarity=0.60,
             match_type="similar",
         )
-        assert card.brand is None
-        assert card.price is None
-        assert card.image_url is None
+        assert product.brand is None
+        assert product.price is None
+        assert product.image_url is None
 
 
 class TestProcessingResult:
@@ -221,7 +221,7 @@ class TestProcessingResult:
         assert result.input_type == InputType.TEXT
         assert result.raw_response == {"key": "value"}
         assert result.error is None
-        assert result.product_carousel is None
+        assert result.products is None
 
     def test_error_result(self) -> None:
         """Test creating an error result."""
@@ -234,10 +234,10 @@ class TestProcessingResult:
         assert result.status == ProcessingStatus.ERROR
         assert result.error == "Connection failed"
 
-    def test_result_with_carousel(self) -> None:
-        """Test creating a result with product carousel."""
+    def test_result_with_products(self) -> None:
+        """Test creating a result with products."""
         cards = [
-            ProductCard(
+            Product(
                 sku="TECH-001",
                 name="Keyboard",
                 brand="Logitech",
@@ -252,11 +252,11 @@ class TestProcessingResult:
             status=ProcessingStatus.SUCCESS,
             response="Found products!",
             input_type=InputType.PHOTO,
-            product_carousel=cards,
+            products=cards,
         )
-        assert result.product_carousel is not None
-        assert len(result.product_carousel) == 1
-        assert result.product_carousel[0].name == "Keyboard"
+        assert result.products is not None
+        assert len(result.products) == 1
+        assert result.products[0].name == "Keyboard"
 
 
 class TestMessageProcessor:
@@ -287,6 +287,44 @@ class TestMessageProcessor:
         assert result.input_type == InputType.TEXT
 
     @pytest.mark.asyncio
+    async def test_process_text_passes_telegram_language_code(
+        self,
+        mock_text_message: MagicMock,
+        mock_bot: MagicMock,
+        mock_nlp_response: dict[str, Any],
+    ) -> None:
+        """Test that text processing passes Telegram language_code as detected_language.
+
+        After removing langdetect, the system relies on:
+        1. Telegram's user.language_code as a fallback for error messages
+        2. Gemini automatically detecting input language and responding accordingly
+
+        The detected_language parameter is passed as a hint, but Gemini makes the
+        final decision on which language to use based on the actual input text.
+        """
+        processor = MessageProcessor()
+
+        # Set a specific language_code in the mock message
+        mock_text_message.from_user.language_code = "es"
+
+        with patch.object(
+            processor._client,
+            "call_nlp_service",
+            new_callable=AsyncMock,
+            return_value=mock_nlp_response,
+        ) as mock_nlp_call:
+            result = await processor.process_message(
+                mock_text_message, InputType.TEXT, mock_bot
+            )
+
+            # Verify Telegram's language_code was passed as detected_language
+            call_kwargs = mock_nlp_call.call_args.kwargs
+            assert call_kwargs.get("detected_language") == "es"
+            assert call_kwargs.get("conversation_id") == str(mock_text_message.chat.id)
+
+        assert result.status == ProcessingStatus.SUCCESS
+
+    @pytest.mark.asyncio
     async def test_process_text_empty(
         self,
         mock_bot: MagicMock,
@@ -300,7 +338,7 @@ class TestMessageProcessor:
         result = await processor.process_message(message, InputType.TEXT, mock_bot)
 
         assert result.status == ProcessingStatus.NO_CONTENT
-        assert "texto" in result.response.lower()
+        assert "text" in result.response.lower()
 
     @pytest.mark.asyncio
     async def test_process_text_nlp_error(
@@ -582,17 +620,17 @@ class TestMessageProcessor:
         assert result.raw_response.get("priority") == "exact_match"
         assert "image_search" in result.raw_response
 
-        # Verify carousel includes ALL found products (exact + similar)
-        assert result.product_carousel is not None
-        assert len(result.product_carousel) == 2  # Both products included
+        # Verify products includes ALL found products (exact + similar)
+        assert result.products is not None
+        assert len(result.products) == 2  # Both products included
         # First product is exact match
-        assert result.product_carousel[0].sku == "TECH-001"
-        assert result.product_carousel[0].name == "Mechanical Keyboard RGB"
-        assert result.product_carousel[0].similarity == 0.85
-        assert result.product_carousel[0].match_type == "exact"
+        assert result.products[0].sku == "TECH-001"
+        assert result.products[0].name == "Mechanical Keyboard RGB"
+        assert result.products[0].similarity == 0.85
+        assert result.products[0].match_type == "exact"
         # Second product is similar
-        assert result.product_carousel[1].sku == "TECH-002"
-        assert result.product_carousel[1].match_type == "similar"
+        assert result.products[1].sku == "TECH-002"
+        assert result.products[1].match_type == "similar"
 
     @pytest.mark.asyncio
     async def test_process_photo_image_search_no_results(
@@ -693,14 +731,14 @@ class TestMessageProcessor:
         assert call_args[0][0] == "keyboard"  # First positional arg is the text
 
     @pytest.mark.asyncio
-    async def test_process_photo_below_threshold_includes_carousel(
+    async def test_process_photo_below_threshold_includes_products(
         self,
         mock_photo_message: MagicMock,
         mock_bot: MagicMock,
         mock_analyze_object_response: dict[str, Any],
         mock_nlp_response: dict[str, Any],
     ) -> None:
-        """Test that products below 80% are included in carousel with NLP response."""
+        """Test that products below 80% are included with NLP response."""
         processor = MessageProcessor()
 
         mock_file = MagicMock()
@@ -750,11 +788,11 @@ class TestMessageProcessor:
                 mock_photo_message, InputType.PHOTO, mock_bot
             )
 
-        # Should include similar products in carousel (new behavior)
-        assert result.product_carousel is not None
-        assert len(result.product_carousel) == 1
-        assert result.product_carousel[0].sku == "TECH-003"
-        assert result.product_carousel[0].match_type == "similar"
+        # Should include similar products
+        assert result.products is not None
+        assert len(result.products) == 1
+        assert result.products[0].sku == "TECH-003"
+        assert result.products[0].match_type == "similar"
         # NLP was called with the object name
         mock_nlp.assert_called_once()
         call_args = mock_nlp.call_args
@@ -815,7 +853,7 @@ class TestMessageProcessor:
         result = await processor.process_message(message, InputType.STICKER, mock_bot)
 
         assert result.status == ProcessingStatus.UNSUPPORTED
-        assert "no está soportado" in result.response.lower()
+        assert "not supported" in result.response.lower()
 
     @pytest.mark.asyncio
     async def test_process_command_returns_empty(
