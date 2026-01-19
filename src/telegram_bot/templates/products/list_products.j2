@@ -1,0 +1,23 @@
+{# =============================================================================
+   Product List Template - Elegant Card Format for Telegram
+
+   Telegram HTML supports: <b>, <i>, <u>, <s>, <a>, <code>, <pre>
+   Images are shown as clickable links (Telegram can't inline images in text)
+
+   Variables:
+     - products: List of product dicts
+     - msgs: Localized messages (price_contact, etc.)
+     - limit: Max products to show (default: 5)
+   ============================================================================= #}
+{% set max_products = limit | default(5) %}
+{% for product in products[:max_products] %}
+┌─────────────────────────
+│ <b>{{ product.name | escape_html }}</b>
+{% if product.brand %}│ 🏷️ <i>{{ product.brand | escape_html }}</i>
+{% endif %}{% if product.description %}│ 📝 {{ product.description | truncate_text(80) | escape_html }}
+{% endif %}{% if product.category %}│ 📂 {{ product.category | escape_html }}
+{% endif %}│ 💰 <b>{{ product.price | format_price("$", msgs.price_contact) }}</b>
+│ 🔖 <code>{{ product.sku | default("N/A") }}</code>
+{% if product.image_url %}│ 🖼️ <a href="{{ product.image_url }}">Ver imagen</a>
+{% endif %}└─────────────────────────
+{% endfor %}

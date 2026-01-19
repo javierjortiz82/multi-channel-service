@@ -566,11 +566,11 @@ class TemplateManager:
         self,
         products: list[dict[str, Any]],
         language_code: str | None = None,
+        limit: int = 5,
     ) -> str:
         """Format products from NLP service response for Telegram display.
 
-        This provides consistent visual formatting for products returned
-        by the NLP service, regardless of how Gemini formatted the text response.
+        Uses Jinja2 template for elegant card format with image links.
 
         Args:
             products: List of product dictionaries with keys:
@@ -582,6 +582,7 @@ class TemplateManager:
                 - category: Product category (optional)
                 - image_url: URL to product image (optional)
             language_code: User's language code for localization.
+            limit: Maximum number of products to display (default: 5).
 
         Returns:
             Formatted product list as Telegram HTML string.
@@ -592,31 +593,12 @@ class TemplateManager:
         lang = self._normalize_language(language_code)
         msgs = PRODUCT_MESSAGES.get(lang, PRODUCT_MESSAGES[self.DEFAULT_LANGUAGE])
 
-        lines: list[str] = []
-
-        # Format each product (limit to 5)
-        for idx, product in enumerate(products[:5], start=1):
-            name = _escape_html(product.get("name", "Unknown"))
-            brand = product.get("brand")
-            description = product.get("description")
-            price = product.get("price")
-            sku = product.get("sku", "N/A")
-
-            card_lines = [f"<b>{idx}. {name}</b>"]
-
-            if brand:
-                card_lines.append(f"   🏢 {_escape_html(brand)}")
-
-            if description:
-                card_lines.append(f"   📝 {_escape_html(_truncate(description, 100))}")
-
-            price_str = _format_price(price, "$", msgs["price_contact"])
-            card_lines.append(f"   💰 {price_str}")
-            card_lines.append(f"   📦 SKU: {sku}")
-
-            lines.append("\n".join(card_lines))
-
-        return "\n\n".join(lines)
+        return self.render(
+            "products/list_products.j2",
+            products=products,
+            msgs=msgs,
+            limit=limit,
+        )
 
 
 # Singleton instance for global access
