@@ -255,7 +255,9 @@ class MessageProcessor:
                 Takes priority over user_info.language_code.
 
         Returns:
-            ProcessingResult with NLP response
+            ProcessingResult with NLP response and optional structured products.
+            Products are available for downstream use (product cards, images, etc.)
+            but NOT appended to response to avoid duplication with Gemini's format.
         """
         try:
             result = await self._client.call_nlp_service(
@@ -266,11 +268,39 @@ class MessageProcessor:
             )
             response = result.get("response", "")
 
+            # Extract structured products from NLP service response
+            # These are available for downstream use (product cards, images)
+            # We don't append them to response to avoid duplication with Gemini's format
+            nlp_products = result.get("products")
+            products_list: list[Product] | None = None
+
+            if nlp_products:
+                logger.info(
+                    "NLP returned structured products: count=%d",
+                    len(nlp_products),
+                )
+
+                # Convert to Product objects for downstream use
+                products_list = [
+                    Product(
+                        sku=p.get("sku", "N/A"),
+                        name=p.get("name", "Unknown"),
+                        brand=p.get("brand"),
+                        description=p.get("description"),
+                        price=p.get("price"),
+                        image_url=p.get("image_url"),
+                        similarity=0.0,  # Not from image search
+                        match_type="text_search",
+                    )
+                    for p in nlp_products
+                ]
+
             return ProcessingResult(
                 status=ProcessingStatus.SUCCESS,
                 response=response,
                 input_type=InputType.TEXT,
                 raw_response=result,
+                products=products_list,
             )
         except Exception as e:
             logger.exception("NLP service error: %s", e)

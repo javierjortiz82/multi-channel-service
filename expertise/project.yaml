@@ -31,6 +31,11 @@ architecture:
     nlp-service:
       url: https://nlp-service-4k3haexkga-uc.a.run.app
       role: Procesamiento de lenguaje natural con Gemini 2.0
+      returns: |
+        TextResponse {
+          response: "texto de Gemini",
+          products: [{sku, name, brand, price, description, category, image_url}] | null
+        }
 
     asr-service:
       url: https://asr-service-4k3haexkga-uc.a.run.app
@@ -45,6 +50,18 @@ architecture:
     TEXT: NLP Service (Gemini auto-detects language)
     VOICE/AUDIO: ASR Service (auto-detect language) → NLP Service
     PHOTO: OCR Service → NLP Service
+
+  product_flow:
+    description: "Productos estructurados desde NLP para formato consistente"
+    steps:
+      - "User pregunta por productos → NLP Service"
+      - "NLP llama MCP tools (fuzzy_search_smart) → productos DB"
+      - "NLP extrae productos y los incluye en TextResponse.products"
+      - "Multi-Channel recibe productos estructurados"
+      - "Disponibles para: product cards, carousels, imágenes"
+    note: |
+      Gemini usa la macro product_format() para formato consistente en texto.
+      Multi-Channel tiene format_nlp_products() para formateo adicional si necesario.
 
 # =============================================================================
 # Archivos Clave
@@ -172,6 +189,33 @@ lessons_learned:
       - src/telegram_bot/services/message_processor.py
       - src/telegram_bot/tests/test_message_processor.py
 
+  - id: structured_product_response
+    date: 2026-01-18
+    problem: "Formato de productos inconsistente - Gemini formateaba libremente"
+    root_cause: |
+      El template agents/sales/base.j2 no incluía la macro product_format().
+      Gemini decidía el formato de productos libremente en cada respuesta.
+      Multi-Channel no tenía acceso a datos estructurados de productos.
+    solution: |
+      Enfoque HÍBRIDO:
+      1. NLP Service extrae productos de MCP y los retorna en TextResponse.products
+      2. NLP template incluye macro product_format() para guiar a Gemini
+      3. Multi-Channel recibe productos estructurados para uso downstream
+
+      Flujo:
+      User → NLP → MCP → products[] → ProcessingResult{text, products}
+                                                ↓
+                              Multi-Channel (format_nlp_products)
+
+      Campos de ProductData: sku, name, brand, price, description, category, image_url
+    files_affected:
+      - nlp-service/app/api/schemas.py (ProductData, TextResponse.products)
+      - nlp-service/app/services/function_calling.py (_extract_products_from_result)
+      - nlp-service/app/api/routes.py (incluir products en respuesta)
+      - nlp-service/app/templates/agents/sales/base.j2 (añadir macro)
+      - multi-channel-service/src/telegram_bot/templates/__init__.py (format_nlp_products)
+      - multi-channel-service/src/telegram_bot/services/message_processor.py
+
 # =============================================================================
 # Patrones y Convenciones
 # =============================================================================
@@ -211,6 +255,7 @@ patterns:
       templates.render_product_list(products, has_exact_match=True)
       templates.render_carousel_caption(product, is_exact=True)
       templates.render_document_prompt(extracted_text)
+      templates.format_nlp_products(products, "es")  # Format NLP products
     add_new_language: |
       1. Create templates/messages/errors/{lang}.j2
       2. Add language code to TemplateManager.SUPPORTED_LANGUAGES
