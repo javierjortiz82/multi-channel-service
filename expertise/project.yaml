@@ -72,6 +72,7 @@ key_files:
   input_classifier: src/telegram_bot/services/input_classifier.py
   message_handler: src/telegram_bot/bot/handlers/message_handler.py
   templates: src/telegram_bot/templates/  # Jinja2 templates for i18n
+  product_template: src/telegram_bot/templates/products/list_products.j2
   dockerfile: deploy/Dockerfile.cloudrun
   cloudbuild: cloudbuild.yaml
 
@@ -200,20 +201,31 @@ lessons_learned:
       Enfoque HÍBRIDO:
       1. NLP Service extrae productos de MCP y los retorna en TextResponse.products
       2. NLP template incluye macro product_format() para guiar a Gemini
-      3. Multi-Channel recibe productos estructurados para uso downstream
+      3. Multi-Channel formatea productos con Jinja2 template (card elegante)
 
       Flujo:
-      User → NLP → MCP → products[] → ProcessingResult{text, products}
+      User → NLP → MCP → products[] → TextResponse{response, products}
                                                 ↓
                               Multi-Channel (format_nlp_products)
+                                                ↓
+                              templates/products/list_products.j2
 
       Campos de ProductData: sku, name, brand, price, description, category, image_url
+
+      Formato visual (Telegram):
+      ┌─────────────────────────
+      │ Product Name
+      │ 🏷️ Brand | 📝 Description
+      │ 💰 Price | 🔖 SKU
+      │ 🖼️ Ver imagen (link)
+      └─────────────────────────
     files_affected:
       - nlp-service/app/api/schemas.py (ProductData, TextResponse.products)
       - nlp-service/app/services/function_calling.py (_extract_products_from_result)
       - nlp-service/app/api/routes.py (incluir products en respuesta)
       - nlp-service/app/templates/agents/sales/base.j2 (añadir macro)
       - multi-channel-service/src/telegram_bot/templates/__init__.py (format_nlp_products)
+      - multi-channel-service/src/telegram_bot/templates/products/list_products.j2 (NEW)
       - multi-channel-service/src/telegram_bot/services/message_processor.py
 
 # =============================================================================
@@ -255,7 +267,13 @@ patterns:
       templates.render_product_list(products, has_exact_match=True)
       templates.render_carousel_caption(product, is_exact=True)
       templates.render_document_prompt(extracted_text)
-      templates.format_nlp_products(products, "es")  # Format NLP products
+      templates.format_nlp_products(products, "es")  # Format NLP products (card style)
+    product_template: |
+      templates/products/list_products.j2 - Elegant card format with:
+      - Box-drawing borders (┌─┐│└─┘)
+      - 🏷️ Brand, 📝 Description, 📂 Category
+      - 💰 Price, 🔖 SKU
+      - 🖼️ Image link (Telegram can't inline images)
     add_new_language: |
       1. Create templates/messages/errors/{lang}.j2
       2. Add language code to TemplateManager.SUPPORTED_LANGUAGES
