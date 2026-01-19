@@ -1,0 +1,19 @@
+{# =============================================================================
+   Product Media Caption - For Media Group photos
+
+   Telegram caption limit: 1024 characters
+   Used as caption for each photo in the media group carousel
+
+   Variables:
+     - product: Single product dict
+     - msgs: Localized messages
+     - is_first: Boolean, if true includes intro text
+     - intro_text: Optional intro from Gemini (only for first photo)
+   ============================================================================= #}
+{% if is_first and intro_text %}{{ intro_text | truncate_text(200) }}
+
+{% endif %}<b>{{ product.name | escape_html }}</b>
+{% if product.brand %}🏷️ {{ product.brand | escape_html }}
+{% endif %}{% if product.description %}📝 {{ product.description | truncate_text(120) | escape_html }}
+{% endif %}💰 <b>{{ product.price | format_price("$", msgs.price_contact) }}</b>
+🔖 <code>{{ product.sku | default("N/A") }}</code>

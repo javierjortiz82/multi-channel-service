@@ -33,7 +33,7 @@ from typing import Any
 from aiogram import Bot, F, Router
 from aiogram.exceptions import TelegramAPIError
 from aiogram.filters import Command
-from aiogram.types import Message
+from aiogram.types import InputMediaPhoto, Message
 
 from telegram_bot.logging_config import get_logger
 from telegram_bot.services.input_classifier import InputClassifier
@@ -71,6 +71,76 @@ async def _safe_answer(
         await message.answer(text, parse_mode=parse_mode)
     except TelegramAPIError as e:
         logger.warning("Failed to send message to chat %d: %s", message.chat.id, e)
+
+
+async def _send_product_media_group(
+    message: Message,
+    result: ProcessingResult,
+    language_code: str | None = None,
+) -> bool:
+    """Send products as media group (photo carousel) if they have images.
+
+    Args:
+        message: The message to reply to.
+        result: Processing result with products and response.
+        language_code: User's language code for localization.
+
+    Returns:
+        True if media group was sent, False if no images available.
+    """
+    if not result.products:
+        return False
+
+    # Filter products with valid image URLs (max 10 for Telegram media group)
+    products_with_images = [
+        p for p in result.products if p.image_url and p.image_url.startswith("http")
+    ][:10]
+
+    if not products_with_images:
+        return False
+
+    # Build media group
+    media_group: list[InputMediaPhoto] = []
+    intro_text = result.response  # Gemini's response as intro on first photo
+
+    for idx, product in enumerate(products_with_images):
+        is_first = idx == 0
+        caption = templates.format_product_caption(
+            product={
+                "name": product.name,
+                "brand": product.brand,
+                "description": product.description,
+                "price": product.price,
+                "sku": product.sku,
+            },
+            language_code=language_code,
+            is_first=is_first,
+            intro_text=intro_text if is_first else None,
+        )
+
+        media_group.append(
+            InputMediaPhoto(
+                media=product.image_url,
+                caption=caption,
+                parse_mode="HTML",
+            )
+        )
+
+    try:
+        await message.answer_media_group(media_group)
+        logger.info(
+            "Sent media group with %d product images to chat %d",
+            len(media_group),
+            message.chat.id,
+        )
+        return True
+    except TelegramAPIError as e:
+        logger.warning(
+            "Failed to send media group to chat %d: %s. Falling back to text.",
+            message.chat.id,
+            e,
+        )
+        return False
 
 
 def _format_products_as_text(
@@ -186,7 +256,11 @@ def create_message_router() -> Router:
     # Register text handler
     @router.message(F.text)
     async def handle_text(message: Message, bot: Bot) -> None:
-        """Handle plain text messages via NLP service."""
+        """Handle plain text messages via NLP service.
+
+        If products with images are returned, sends as media group carousel.
+        Otherwise sends text response.
+        """
         input_type = classifier.classify(message)
         processor = get_processor()
 
@@ -194,6 +268,14 @@ def create_message_router() -> Router:
         async with continuous_typing(bot, message.chat.id):
             result = await processor.process_message(message, input_type, bot)
 
+        # Try to send products as media group if available
+        if result.products:
+            user_lang = message.from_user.language_code if message.from_user else None
+            media_sent = await _send_product_media_group(message, result, user_lang)
+            if media_sent:
+                return  # Media group sent successfully
+
+        # Fallback to text response
         if result.response:
             await _safe_answer(message, result.response)
 
@@ -230,7 +312,8 @@ def create_message_router() -> Router:
     async def handle_photo(message: Message, bot: Bot) -> None:
         """Handle photo messages via OCR + NLP service.
 
-        For product image searches, displays results as text list.
+        For product image searches, displays results as media group carousel.
+        Falls back to text list if images unavailable.
         """
         input_type = classifier.classify(message)
         processor = get_processor()
@@ -241,8 +324,15 @@ def create_message_router() -> Router:
 
         # Check if we have products to display
         if result.products:
-            # Send products as text list (localized to user's language)
             user_lang = message.from_user.language_code if message.from_user else None
+
+            # Try media group first
+            media_sent = await _send_product_media_group(message, result, user_lang)
+            if media_sent:
+                logger.info("Sent media group for %d products", len(result.products))
+                return
+
+            # Fallback to text list
             product_text = _format_products_as_text(result, user_lang)
             await _safe_answer(message, product_text, parse_mode="HTML")
             logger.info("Sent text list for %d products", len(result.products))

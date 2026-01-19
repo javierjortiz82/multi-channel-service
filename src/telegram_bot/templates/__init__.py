@@ -600,6 +600,35 @@ class TemplateManager:
             limit=limit,
         )
 
+    def format_product_caption(
+        self,
+        product: dict[str, Any],
+        language_code: str | None = None,
+        is_first: bool = False,
+        intro_text: str | None = None,
+    ) -> str:
+        """Format a single product caption for media group photo.
+
+        Args:
+            product: Product dictionary with name, brand, price, etc.
+            language_code: User's language code for localization.
+            is_first: If True, includes intro_text (Gemini's response).
+            intro_text: Optional intro text from Gemini (only shown on first photo).
+
+        Returns:
+            Formatted caption string (max ~1024 chars for Telegram).
+        """
+        lang = self._normalize_language(language_code)
+        msgs = PRODUCT_MESSAGES.get(lang, PRODUCT_MESSAGES[self.DEFAULT_LANGUAGE])
+
+        return self.render(
+            "products/media_caption.j2",
+            product=product,
+            msgs=msgs,
+            is_first=is_first,
+            intro_text=intro_text,
+        )
+
 
 # Singleton instance for global access
 templates = TemplateManager()
