@@ -40,6 +40,7 @@ ERROR_MESSAGES: dict[str, dict[str, str]] = {
         "unsupported": "Este tipo de contenido no está soportado aún. Por favor envía texto o audio.",
         "no_text_in_image": "He recibido tu imagen, pero no encontré texto para procesar.",
         "low_confidence": "No pude entender claramente el audio. Por favor, habla más despacio y claro, o reduce el ruido de fondo.",
+        "no_objects_detected": "No pude identificar objetos en la imagen. Por favor intenta con otra foto.",
     },
     "en": {
         "nlp_failed": "Sorry, there was an error processing your message. Please try again.",
@@ -51,6 +52,7 @@ ERROR_MESSAGES: dict[str, dict[str, str]] = {
         "unsupported": "This content type is not supported yet. Please send text or audio.",
         "no_text_in_image": "I received your image, but I couldn't find any text to process.",
         "low_confidence": "I couldn't clearly understand the audio. Please speak more slowly and clearly, or reduce background noise.",
+        "no_objects_detected": "I couldn't identify objects in the image. Please try another photo.",
     },
     "pt": {
         "nlp_failed": "Desculpe, houve um erro ao processar sua mensagem. Por favor, tente novamente.",
@@ -62,6 +64,7 @@ ERROR_MESSAGES: dict[str, dict[str, str]] = {
         "unsupported": "Este tipo de conteúdo ainda não é suportado. Por favor, envie texto ou áudio.",
         "no_text_in_image": "Recebi sua imagem, mas não encontrei texto para processar.",
         "low_confidence": "Não consegui entender claramente o áudio. Por favor, fale mais devagar e claramente, ou reduza o ruído de fundo.",
+        "no_objects_detected": "Não consegui identificar objetos na imagem. Por favor, tente outra foto.",
     },
     "fr": {
         "nlp_failed": "Désolé, une erreur s'est produite lors du traitement de votre message. Veuillez réessayer.",
@@ -73,6 +76,7 @@ ERROR_MESSAGES: dict[str, dict[str, str]] = {
         "unsupported": "Ce type de contenu n'est pas encore pris en charge. Veuillez envoyer du texte ou de l'audio.",
         "no_text_in_image": "J'ai reçu votre image, mais je n'ai trouvé aucun texte à traiter.",
         "low_confidence": "Je n'ai pas pu comprendre clairement l'audio. Veuillez parler plus lentement et clairement, ou réduire le bruit de fond.",
+        "no_objects_detected": "Je n'ai pas pu identifier d'objets dans l'image. Veuillez essayer une autre photo.",
     },
     "ar": {
         "nlp_failed": "عذراً، حدث خطأ أثناء معالجة رسالتك. يرجى المحاولة مرة أخرى.",
@@ -84,6 +88,7 @@ ERROR_MESSAGES: dict[str, dict[str, str]] = {
         "unsupported": "هذا النوع من المحتوى غير مدعوم حالياً. يرجى إرسال نص أو صوت.",
         "no_text_in_image": "استلمت صورتك، لكن لم أجد أي نص للمعالجة.",
         "low_confidence": "لم أتمكن من فهم الصوت بوضوح. يرجى التحدث ببطء ووضوح أكثر، أو تقليل الضوضاء المحيطة.",
+        "no_objects_detected": "لم أتمكن من تحديد أي أجسام في الصورة. يرجى تجربة صورة أخرى.",
     },
 }
 
@@ -454,14 +459,18 @@ class MessageProcessor:
         message: Message,
         bot: Bot,
     ) -> ProcessingResult:
-        """Process a photo message via OCR then NLP.
+        """Process a photo message via intelligent analysis (OCR or object detection).
+
+        Routes images based on their content type:
+        - Documents: OCR extraction + NLP interpretation
+        - Objects: Object detection + NLP product search via MCP tools
 
         Args:
             message: The photo message to process
             bot: The Bot instance for downloading files
 
         Returns:
-            ProcessingResult with OCR extracted text and NLP response
+            ProcessingResult with analysis response
         """
         lang = message.from_user.language_code if message.from_user else None
         if not message.photo:
@@ -498,58 +507,56 @@ class MessageProcessor:
             chat_id = str(message.chat.id)
             client_id = f"{user_id}:{chat_id}"
 
-            # Extract text via OCR
-            ocr_result = await self._client.call_ocr_service(
+            # Use intelligent analyze endpoint (auto-classifies document vs object)
+            analyze_result = await self._client.call_analyze_service(
                 file_content=image_content,
                 filename="photo.jpg",
                 mime_type="image/jpeg",
                 client_id=client_id,
+                mode="auto",
             )
 
-            extracted_text = ocr_result.get("text", "")
-            if not extracted_text:
-                # No text found in image, just acknowledge
-                return ProcessingResult(
-                    status=ProcessingStatus.SUCCESS,
-                    response=_get_message("no_text_in_image", lang),
-                    input_type=InputType.PHOTO,
-                    raw_response=ocr_result,
-                )
+            # Extract classification
+            classification = analyze_result.get("classification", {})
+            predicted_type = classification.get("predicted_type", "unknown")
+            confidence = classification.get("confidence", 0.0)
 
-            logger.info("OCR extracted: %s", extracted_text[:100])
+            logger.info(
+                "Image classified: type=%s, confidence=%.2f",
+                predicted_type,
+                confidence,
+            )
 
-            # Process extracted text via NLP with conversation context
+            # Prepare common context
             conversation_id = str(message.chat.id)
             user_info = _extract_user_info(message)
 
-            # Build a helpful prompt for the NLP to analyze the OCR text
-            ocr_prompt = (
-                "El usuario ha enviado una imagen y he extraído el siguiente texto de ella:\n\n"
-                f'"""\n{extracted_text}\n"""\n\n'
-                "Por favor, ayuda al usuario interpretando este texto. "
-                "Si es un documento, resume su contenido. "
-                "Si son datos o una lista, organízalos. "
-                "Si es un mensaje o nota, responde apropiadamente. "
-                "Si el texto no tiene sentido o está incompleto, indica qué pudiste identificar."
-            )
-
-            nlp_result = await self._client.call_nlp_service(
-                ocr_prompt,
-                conversation_id=conversation_id,
-                user_info=user_info,
-            )
-            response = nlp_result.get("response", "")
-
-            return ProcessingResult(
-                status=ProcessingStatus.SUCCESS,
-                response=response,
-                input_type=InputType.PHOTO,
-                raw_response={
-                    "ocr": ocr_result,
-                    "nlp": nlp_result,
-                    "extracted_text": extracted_text,
-                },
-            )
+            # Route based on image type
+            if predicted_type == "document":
+                return await self._handle_document_image(
+                    analyze_result=analyze_result,
+                    conversation_id=conversation_id,
+                    user_info=user_info,
+                    lang=lang,
+                )
+            elif predicted_type == "object":
+                return await self._handle_object_image(
+                    analyze_result=analyze_result,
+                    conversation_id=conversation_id,
+                    user_info=user_info,
+                    lang=lang,
+                )
+            else:
+                # Unknown type - try document flow as fallback
+                logger.warning(
+                    "Unknown image type '%s', using document flow", predicted_type
+                )
+                return await self._handle_document_image(
+                    analyze_result=analyze_result,
+                    conversation_id=conversation_id,
+                    user_info=user_info,
+                    lang=lang,
+                )
 
         except Exception as e:
             logger.exception("Photo processing error: %s", e)
@@ -559,6 +566,178 @@ class MessageProcessor:
                 input_type=InputType.PHOTO,
                 error=str(e),
             )
+
+    async def _handle_document_image(
+        self,
+        analyze_result: dict[str, Any],
+        conversation_id: str,
+        user_info: dict[str, Any] | None,
+        lang: str | None,
+    ) -> ProcessingResult:
+        """Handle document images (OCR flow).
+
+        Extracts text from the image and sends it to NLP for interpretation.
+
+        Args:
+            analyze_result: Result from analyze service
+            conversation_id: Conversation ID for context
+            user_info: User information for tracking
+            lang: User's language code
+
+        Returns:
+            ProcessingResult with interpreted document content
+        """
+        # Extract OCR text from analyze result
+        ocr_result = analyze_result.get("ocr_result", {})
+        extracted_text = ocr_result.get("text", "")
+
+        if not extracted_text:
+            # No text found in image
+            return ProcessingResult(
+                status=ProcessingStatus.SUCCESS,
+                response=_get_message("no_text_in_image", lang),
+                input_type=InputType.PHOTO,
+                raw_response=analyze_result,
+            )
+
+        logger.info("Document OCR extracted: %s", extracted_text[:100])
+
+        # Build prompt for NLP to interpret the document
+        ocr_prompt = (
+            "El usuario ha enviado una imagen de un documento y he extraído el siguiente texto:\n\n"
+            f'"""\n{extracted_text}\n"""\n\n'
+            "Por favor, ayuda al usuario interpretando este texto. "
+            "Si es un documento, resume su contenido. "
+            "Si son datos o una lista, organízalos. "
+            "Si es un mensaje o nota, responde apropiadamente. "
+            "Si el texto no tiene sentido o está incompleto, indica qué pudiste identificar."
+        )
+
+        nlp_result = await self._client.call_nlp_service(
+            ocr_prompt,
+            conversation_id=conversation_id,
+            user_info=user_info,
+        )
+        response = nlp_result.get("response", "")
+
+        return ProcessingResult(
+            status=ProcessingStatus.SUCCESS,
+            response=response,
+            input_type=InputType.PHOTO,
+            raw_response={
+                "analyze": analyze_result,
+                "nlp": nlp_result,
+                "extracted_text": extracted_text,
+                "image_type": "document",
+            },
+        )
+
+    async def _handle_object_image(
+        self,
+        analyze_result: dict[str, Any],
+        conversation_id: str,
+        user_info: dict[str, Any] | None,
+        lang: str | None,
+    ) -> ProcessingResult:
+        """Handle object images (detection + visual similarity search flow).
+
+        Extracts image embedding and description for visual search using
+        search_products_by_embedding MCP tool (Google Lens style).
+
+        Args:
+            analyze_result: Result from analyze service
+            conversation_id: Conversation ID for context
+            user_info: User information for tracking
+            lang: User's language code
+
+        Returns:
+            ProcessingResult with product search results
+        """
+        # Extract detection result
+        detection_result = analyze_result.get("detection_result", {})
+        detected_objects_raw = detection_result.get("objects", [])
+        # image_description and image_embedding are at root level of analyze_result
+        image_description = analyze_result.get("image_description", "")
+        image_embedding = analyze_result.get("image_embedding")
+
+        # Extract object names from the list of object dictionaries
+        # Each object has: name, confidence, mid, bounding_box
+        object_names = [
+            obj.get("name", "") for obj in detected_objects_raw if isinstance(obj, dict)
+        ]
+        # Filter out empty names
+        object_names = [name for name in object_names if name]
+
+        if not object_names and not image_description and not image_embedding:
+            # No objects detected and no embedding
+            return ProcessingResult(
+                status=ProcessingStatus.SUCCESS,
+                response=_get_message("no_objects_detected", lang),
+                input_type=InputType.PHOTO,
+                raw_response=analyze_result,
+            )
+
+        # Format detected objects for the prompt
+        objects_str = ", ".join(object_names) if object_names else "No específico"
+
+        # Log embedding status
+        if image_embedding:
+            logger.info(
+                "Visual search enabled: embedding_dim=%d, objects=%s, description=%s",
+                len(image_embedding),
+                objects_str,
+                image_description[:100] if image_description else "none",
+            )
+        else:
+            logger.info(
+                "Fallback to text search (no embedding): objects=%s, description=%s",
+                objects_str,
+                image_description[:100] if image_description else "none",
+            )
+
+        # Build prompt based on whether we have embedding for visual search
+        if image_embedding:
+            # Visual search mode - embedding will be passed to NLP service
+            object_prompt = (
+                "El usuario ha enviado una imagen de un producto.\n\n"
+                f"Descripción de la imagen: {image_description or objects_str}\n\n"
+                "Busca productos visualmente similares a esta imagen."
+            )
+        else:
+            # Fallback to text-based search
+            object_prompt = (
+                "El usuario ha enviado una imagen de un objeto.\n\n"
+                f"Objetos detectados: {objects_str}\n"
+            )
+            if image_description:
+                object_prompt += f"Descripción de la imagen: {image_description}\n"
+            object_prompt += (
+                "\nBusca productos relacionados con estos objetos usando la herramienta fuzzy_search_smart().\n"
+                "Muestra los productos encontrados al usuario de forma amigable."
+            )
+
+        nlp_result = await self._client.call_nlp_service(
+            object_prompt,
+            conversation_id=conversation_id,
+            user_info=user_info,
+            image_embedding=image_embedding,
+            image_description=image_description,
+        )
+        response = nlp_result.get("response", "")
+
+        return ProcessingResult(
+            status=ProcessingStatus.SUCCESS,
+            response=response,
+            input_type=InputType.PHOTO,
+            raw_response={
+                "analyze": analyze_result,
+                "nlp": nlp_result,
+                "detected_objects": object_names,
+                "image_description": image_description,
+                "image_type": "object",
+                "visual_search_enabled": image_embedding is not None,
+            },
+        )
 
 
 # Singleton instance

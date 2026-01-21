@@ -332,6 +332,8 @@ class InternalServiceClient:
         text: str,
         conversation_id: str | None = None,
         user_info: dict[str, Any] | None = None,
+        image_embedding: list[float] | None = None,
+        image_description: str | None = None,
     ) -> dict[str, Any]:
         """Call the NLP service for text processing using Gemini.
 
@@ -346,6 +348,10 @@ class InternalServiceClient:
                 - last_name: User's last name (optional)
                 - username: User's handle (optional)
                 - language_code: User's language (optional)
+            image_embedding: Optional 1536-dim image embedding for visual search.
+                When provided, NLP service will use search_products_by_embedding
+                instead of text-based search.
+            image_description: Optional description of the image for context.
 
         Returns:
             NLP processing response
@@ -363,12 +369,17 @@ class InternalServiceClient:
             payload["conversation_id"] = conversation_id
         if user_info:
             payload["user"] = user_info
+        if image_embedding:
+            payload["image_embedding"] = image_embedding
+        if image_description:
+            payload["image_description"] = image_description
 
         logger.info(
-            "Calling NLP service with %d characters, conversation_id=%s, has_user=%s",
+            "Calling NLP service with %d characters, conversation_id=%s, has_user=%s, has_embedding=%s",
             len(text),
             conversation_id,
             user_info is not None,
+            image_embedding is not None,
         )
         start = time.perf_counter()
 
@@ -476,6 +487,47 @@ class InternalServiceClient:
         response.raise_for_status()
         result: dict[str, Any] = response.json()
         logger.info("OCR service extracted text")
+        return result
+
+    async def call_analyze_service(
+        self,
+        file_content: bytes,
+        filename: str,
+        mime_type: str = "image/jpeg",
+        client_id: str = "telegram-bot",
+        mode: str = "auto",
+    ) -> dict[str, Any]:
+        """Call the OCR service analyze endpoint for intelligent image processing.
+
+        Args:
+            file_content: Binary content of the image file
+            filename: Name of the file
+            mime_type: MIME type of the file
+            client_id: Client identifier for tracking
+            mode: Processing mode (auto, ocr, detection, both)
+
+        Returns:
+            Analysis response with classification, OCR/detection results,
+            and optional image_embedding for similarity search.
+        """
+        token = await self._get_identity_token(self.ocr_url)
+        headers = {"Authorization": f"Bearer {token}"}
+
+        logger.info("Calling analyze service: file=%s, mode=%s", filename, mode)
+
+        response = await self._request_with_retry(
+            "POST",
+            f"{self.ocr_url}/analyze/upload",
+            headers=headers,
+            files={"file": (filename, file_content, mime_type)},
+            data={"client_id": client_id, "mode": mode},
+        )
+        response.raise_for_status()
+        result: dict[str, Any] = response.json()
+        logger.info(
+            "Analyze completed: type=%s",
+            result.get("classification", {}).get("predicted_type"),
+        )
         return result
 
     async def close(self) -> None:

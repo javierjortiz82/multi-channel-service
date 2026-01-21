@@ -24,10 +24,12 @@ def mock_nlp_response() -> dict[str, Any]:
 def mock_asr_response() -> dict[str, Any]:
     """Mock ASR service response."""
     return {
-        "text": "Transcribed audio text",
-        "confidence": 0.95,
-        "language": "en",
-        "duration": 5.5,
+        "data": {
+            "transcription": "Transcribed audio text",
+            "confidence": 0.95,
+            "language": "en",
+        },
+        "success": True,
     }
 
 
@@ -51,7 +53,6 @@ class TestInternalServiceClient:
         assert "nlp-service" in client.nlp_url
         assert "asr-service" in client.asr_url
         assert "ocr-service" in client.ocr_url
-        assert client.timeout == 60.0
 
     def test_init_with_custom_urls(self) -> None:
         """Test client initialization with custom URLs."""
@@ -59,29 +60,29 @@ class TestInternalServiceClient:
             nlp_service_url="https://custom-nlp.example.com",
             asr_service_url="https://custom-asr.example.com",
             ocr_service_url="https://custom-ocr.example.com",
-            timeout=30.0,
         )
 
         assert client.nlp_url == "https://custom-nlp.example.com"
         assert client.asr_url == "https://custom-asr.example.com"
         assert client.ocr_url == "https://custom-ocr.example.com"
-        assert client.timeout == 30.0
 
-    def test_get_auth_headers_without_token(self) -> None:
-        """Test auth headers when token fetch fails."""
+    @pytest.mark.asyncio
+    async def test_get_identity_token_caching(self) -> None:
+        """Test that identity tokens are cached."""
         client = InternalServiceClient()
 
-        # Mock token fetch to fail
         with patch.object(
             client,
-            "_get_identity_token",
-            side_effect=Exception("No credentials"),
+            "_fetch_token_sync",
+            return_value="test_token_123",
         ):
-            headers = client._get_auth_headers("https://example.com")
+            # First call - should fetch new token
+            token1 = await client._get_identity_token("https://example.com")
+            # Second call - should use cached token
+            token2 = await client._get_identity_token("https://example.com")
 
-        # Should return headers without Authorization when token fails
-        assert "Content-Type" in headers
-        assert headers["Content-Type"] == "application/json"
+        assert token1 == "test_token_123"
+        assert token2 == "test_token_123"
 
     @pytest.mark.asyncio
     async def test_call_nlp_service_success(
@@ -98,14 +99,62 @@ class TestInternalServiceClient:
         with (
             patch.object(
                 client,
-                "_get_auth_headers",
-                return_value={"Authorization": "Bearer test"},
+                "_get_identity_token",
+                new_callable=AsyncMock,
+                return_value="test_token",
             ),
-            patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post,
+            patch.object(
+                client,
+                "_request_with_retry",
+                new_callable=AsyncMock,
+                return_value=mock_response,
+            ),
         ):
-            mock_post.return_value = mock_response
             result = await client.call_nlp_service("Hello world")
 
+        assert result == mock_nlp_response
+
+    @pytest.mark.asyncio
+    async def test_call_nlp_service_with_embedding(
+        self,
+        mock_nlp_response: dict[str, Any],
+    ) -> None:
+        """Test NLP service call with image embedding for visual search."""
+        client = InternalServiceClient()
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = mock_nlp_response
+        mock_response.raise_for_status = MagicMock()
+
+        # Create a mock embedding (1536 dimensions)
+        mock_embedding = [0.1] * 1536
+
+        with (
+            patch.object(
+                client,
+                "_get_identity_token",
+                new_callable=AsyncMock,
+                return_value="test_token",
+            ),
+            patch.object(
+                client,
+                "_request_with_retry",
+                new_callable=AsyncMock,
+                return_value=mock_response,
+            ) as mock_request,
+        ):
+            result = await client.call_nlp_service(
+                "Find similar products",
+                conversation_id="12345",
+                image_embedding=mock_embedding,
+                image_description="laptop HP silver",
+            )
+
+        # Verify the embedding was included in the payload
+        call_args = mock_request.call_args
+        json_payload = call_args.kwargs.get("json", {})
+        assert json_payload.get("image_embedding") == mock_embedding
+        assert json_payload.get("image_description") == "laptop HP silver"
         assert result == mock_nlp_response
 
     @pytest.mark.asyncio
@@ -116,19 +165,23 @@ class TestInternalServiceClient:
         with (
             patch.object(
                 client,
-                "_get_auth_headers",
-                return_value={"Authorization": "Bearer test"},
+                "_get_identity_token",
+                new_callable=AsyncMock,
+                return_value="test_token",
             ),
-            patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post,
+            patch.object(
+                client,
+                "_request_with_retry",
+                new_callable=AsyncMock,
+                side_effect=httpx.HTTPStatusError(
+                    "Server error",
+                    request=MagicMock(),
+                    response=MagicMock(status_code=500),
+                ),
+            ),
+            pytest.raises(httpx.HTTPStatusError),
         ):
-            mock_post.side_effect = httpx.HTTPStatusError(
-                "Server error",
-                request=MagicMock(),
-                response=MagicMock(status_code=500),
-            )
-
-            with pytest.raises(httpx.HTTPStatusError):
-                await client.call_nlp_service("Hello world")
+            await client.call_nlp_service("Hello world")
 
     @pytest.mark.asyncio
     async def test_call_asr_service_success(
@@ -143,10 +196,19 @@ class TestInternalServiceClient:
         mock_response.raise_for_status = MagicMock()
 
         with (
-            patch.object(client, "_get_identity_token", return_value="test_token"),
-            patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post,
+            patch.object(
+                client,
+                "_get_identity_token",
+                new_callable=AsyncMock,
+                return_value="test_token",
+            ),
+            patch.object(
+                client,
+                "_request_with_retry",
+                new_callable=AsyncMock,
+                return_value=mock_response,
+            ),
         ):
-            mock_post.return_value = mock_response
             result = await client.call_asr_service(
                 audio_content=b"fake audio",
                 filename="test.ogg",
@@ -168,10 +230,19 @@ class TestInternalServiceClient:
         mock_response.raise_for_status = MagicMock()
 
         with (
-            patch.object(client, "_get_identity_token", return_value="test_token"),
-            patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post,
+            patch.object(
+                client,
+                "_get_identity_token",
+                new_callable=AsyncMock,
+                return_value="test_token",
+            ),
+            patch.object(
+                client,
+                "_request_with_retry",
+                new_callable=AsyncMock,
+                return_value=mock_response,
+            ),
         ):
-            mock_post.return_value = mock_response
             result = await client.call_ocr_service(
                 file_content=b"fake image",
                 filename="test.jpg",
@@ -181,62 +252,87 @@ class TestInternalServiceClient:
         assert result == mock_ocr_response
 
     @pytest.mark.asyncio
-    async def test_health_check(self) -> None:
-        """Test health check for all services."""
+    async def test_call_analyze_service_success(self) -> None:
+        """Test successful analyze service call."""
+        client = InternalServiceClient()
+
+        mock_analyze_response = {
+            "classification": {"predicted_type": "object", "confidence": 0.95},
+            "detection_result": {"objects": [{"name": "laptop"}]},
+            "image_embedding": [0.1] * 1536,
+            "image_description": "A laptop on a desk",
+        }
+
+        mock_response = MagicMock()
+        mock_response.json.return_value = mock_analyze_response
+        mock_response.raise_for_status = MagicMock()
+
+        with (
+            patch.object(
+                client,
+                "_get_identity_token",
+                new_callable=AsyncMock,
+                return_value="test_token",
+            ),
+            patch.object(
+                client,
+                "_request_with_retry",
+                new_callable=AsyncMock,
+                return_value=mock_response,
+            ),
+        ):
+            result = await client.call_analyze_service(
+                file_content=b"fake image",
+                filename="test.jpg",
+                mode="auto",
+            )
+
+        assert result["classification"]["predicted_type"] == "object"
+        assert "image_embedding" in result
+
+    @pytest.mark.asyncio
+    async def test_warmup_fetches_tokens(self) -> None:
+        """Test that warmup pre-fetches tokens for all services."""
         client = InternalServiceClient()
 
         mock_response = MagicMock()
         mock_response.status_code = 200
-        mock_response.json.return_value = {"status": "healthy"}
 
         with (
             patch.object(
                 client,
-                "_get_auth_headers",
-                return_value={"Authorization": "Bearer test"},
-            ),
-            patch("httpx.AsyncClient.get", new_callable=AsyncMock) as mock_get,
+                "_get_identity_token",
+                new_callable=AsyncMock,
+                return_value="test_token",
+            ) as mock_get_token,
+            patch.object(
+                client,
+                "_get_http_client",
+                new_callable=AsyncMock,
+            ) as mock_get_client,
         ):
-            mock_get.return_value = mock_response
-            result = await client.health_check()
+            mock_http_client = AsyncMock()
+            mock_http_client.get.return_value = mock_response
+            mock_get_client.return_value = mock_http_client
 
-        assert "nlp" in result
-        assert "asr" in result
-        assert "ocr" in result
+            await client.warmup()
+
+        # Should have fetched tokens for all 3 services
+        assert mock_get_token.call_count == 3
 
     @pytest.mark.asyncio
-    async def test_health_check_partial_failure(self) -> None:
-        """Test health check when some services are unavailable."""
+    async def test_close_closes_http_client(self) -> None:
+        """Test that close properly closes the HTTP client."""
         client = InternalServiceClient()
 
-        call_count = 0
+        # Create a mock HTTP client
+        mock_http_client = AsyncMock()
+        client._http_client = mock_http_client
 
-        async def mock_get(*_args: Any, **_kwargs: Any) -> MagicMock:
-            nonlocal call_count
-            call_count += 1
-            if call_count == 1:
-                # First service healthy
-                response = MagicMock()
-                response.status_code = 200
-                response.json.return_value = {"status": "healthy"}
-                return response
-            else:
-                # Other services fail
-                raise httpx.ConnectError("Connection refused")
+        await client.close()
 
-        with (
-            patch.object(
-                client,
-                "_get_auth_headers",
-                return_value={"Authorization": "Bearer test"},
-            ),
-            patch("httpx.AsyncClient.get", new_callable=AsyncMock) as mock_get_method,
-        ):
-            mock_get_method.side_effect = mock_get
-            result = await client.health_check()
-
-        # Should have results for all services (some healthy, some error)
-        assert len(result) == 3
+        mock_http_client.aclose.assert_called_once()
+        assert client._http_client is None
 
 
 class TestGetClient:
