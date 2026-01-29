@@ -3,7 +3,7 @@
 # =============================================================================
 # Este archivo contiene el conocimiento acumulado del proyecto.
 # Claude lee esta expertise al inicio de cada sesión.
-# Actualizado: 2026-01-16
+# Actualizado: 2026-01-29
 # =============================================================================
 
 project:
@@ -45,6 +45,22 @@ architecture:
     TEXT: NLP Service
     VOICE/AUDIO: ASR Service → NLP Service
     PHOTO: OCR Service → NLP Service
+
+  escalation_flow:
+    description: "Flujo de escalación a agentes humanos (2026-01-29)"
+    trigger: "NLP Service detecta emociones negativas o solicitud de humano"
+    flow:
+      - "Usuario envía mensaje con emoción negativa"
+      - "NLP Service analiza sentimiento (via prompt sales.j2)"
+      - "Si 3+ emociones negativas → NLP llama escalate_to_human() via MCP"
+      - "MCP Server crea registro en test.escalations"
+      - "Bot responde: 'Voy a conectarte con un especialista...'"
+      - "Dashboard API muestra escalación pendiente"
+      - "Agente humano reclama y resuelve"
+    immediate_triggers:
+      - customer_request: "quiero hablar con una persona"
+      - system_error: "error del sistema", "no funciona"
+      - payment_issue: "cobro duplicado", "problema con pago"
 
 # =============================================================================
 # Archivos Clave
@@ -132,6 +148,104 @@ lessons_learned:
     problem: "Webhook retornaba 401 Unauthorized"
     root_cause: "Faltaba secret_token en la configuración del webhook"
     solution: "Incluir &secret_token=... en el setWebhook URL"
+
+  - id: bant_proactive_questions
+    date: 2026-01-28
+    problem: "Sistema BANT solo reactivo, depende 100% del juicio del LLM"
+    root_cause: |
+      El bot esperaba a que Gemini decidiera llamar analyze_lead_bant().
+      Sin preguntas proactivas, no recopilaba info BANT consistentemente.
+    solution: |
+      Agregadas preguntas BANT proactivas al template de ventas (sales.j2):
+      - Timeline: "¿Para cuándo necesitarías los productos?"
+      - Budget: "¿Cuál es tu presupuesto aproximado?"
+      - Need: "¿Para cuántas personas necesitas el equipo?"
+      - Authority: "¿Tú tomarás la decisión de compra?"
+      Reglas: Una pregunta por mensaje, orden de prioridad, sin repetir
+    files_affected:
+      - nlp-service/app/templates/system_instructions/sales.j2
+
+  - id: sentiment_escalation_system
+    date: 2026-01-29
+    problem: "Bot no escalaba apropiadamente con clientes frustrados"
+    root_cause: |
+      No había sistema de tracking de emociones negativas ni reglas claras
+      de cuándo escalar a un humano.
+    solution: |
+      Implementación completa de sistema de escalación:
+
+      1. Prompt (sales.j2): Sistema de 3-strikes
+         - 1ra emoción negativa → Empatía + resolver
+         - 2da emoción negativa → Disculpa + alternativa
+         - 3ra emoción negativa → ESCALAR
+
+      2. MCP Tool (escalate_to_human): Crea registro en BD
+         - Guarda context (conversation_summary, last_message)
+         - Vincula con BANT lead si existe
+         - Asigna prioridad según reason
+
+      3. Dashboard API: CRUD completo de escalaciones
+         - Cola de pendientes ordenada por prioridad
+         - Workflow: pending → assigned → in_progress → resolved
+
+      Escalación inmediata (sin contar): customer_request, system_error, payment_issue
+    files_affected:
+      - nlp-service/app/templates/system_instructions/sales.j2
+      - mcp-server/tools/sales/escalation.py
+      - mcp-server/mcp_handlers/sales_handlers.py
+      - mcp-server/sql/004_create_escalations_table.sql
+      - dashboard_api/app/models/escalation.py
+      - dashboard_api/app/services/escalation_service.py
+      - dashboard_api/app/routers/escalations.py
+
+  - id: conversation_memory_improvements
+    date: 2026-01-29
+    problem: "Bot no mantenía contexto adecuado entre mensajes"
+    root_cause: |
+      El sistema de memoria de conversación solo incluía mensajes del usuario
+      (include_assistant=False), haciendo que el LLM no viera sus respuestas
+      anteriores y tratara cada mensaje como aislado.
+    solution: |
+      Mejoras implementadas en NLP Service:
+
+      1. Formato Estructurado XML:
+         - Incluye tanto usuario como asistente
+         - Tags: <conversation_history>, <turn role="user/assistant">
+         - Timestamps relativos: "5m ago", "2h ago"
+
+      2. Control por Tokens:
+         - Límite de ~2000 tokens por historial
+         - Trim automático de mensajes antiguos
+         - Aumentado MAX_HISTORY_MESSAGES a 10
+
+      3. Feature Flags para Rollback:
+         - MEMORY_INCLUDE_ASSISTANT (default: true)
+         - MEMORY_USE_STRUCTURED_FORMAT (default: true)
+         - MEMORY_MAX_TOKENS (default: 2000)
+         - MEMORY_SUMMARIZATION_ENABLED (default: false)
+
+      4. Instrucción de Idioma:
+         - Template actualizado con instrucción explícita
+         - Responder en idioma del mensaje ACTUAL
+         - Ignorar idiomas del historial
+
+      5. Sistema de Resumen (preparado, deshabilitado):
+         - ConversationSummarizer service
+         - Tabla nlp_conversation_summaries
+         - Trigger: 8+ mensajes
+         - Gemini genera resumen de mensajes antiguos
+    files_affected:
+      - nlp-service/config/settings.py
+      - nlp-service/app/services/conversation_memory.py
+      - nlp-service/app/services/conversation_summarizer.py (nuevo)
+      - nlp-service/app/templates/unified.j2
+      - nlp-service/app/templates/_base/macros.j2
+      - nlp-service/app/api/routes.py
+      - nlp-service/app/db/database.py
+    rollback_levels:
+      - level_1: "MEMORY_SUMMARIZATION_ENABLED=false (solo resumen)"
+      - level_2: "MEMORY_INCLUDE_ASSISTANT=false (solo usuario)"
+      - level_3: "MEMORY_USE_STRUCTURED_FORMAT=false (legacy completo)"
 
 # =============================================================================
 # Patrones y Convenciones
