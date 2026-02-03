@@ -303,12 +303,11 @@ async def _handle_add_to_cart(
         # Build command for NLP to interpret
         command = f"Agregar producto ID {product_id} al carrito"
 
-        result = await client.call_nlp_service(
+        # Call NLP to add product (response not used - we show our own confirmation)
+        await client.call_nlp_service(
             text=command,
             conversation_id=conversation_id,
         )
-
-        response = result.get("response", "")
 
         # Build keyboard with "Ver Carrito" button
         keyboard = InlineKeyboardMarkup(
@@ -325,21 +324,13 @@ async def _handle_add_to_cart(
             ]
         )
 
-        # Send confirmation with product name and view cart button
-        if response:
-            await bot.send_message(
-                chat_id=chat_id,
-                text=response,
-                parse_mode="HTML",
-                reply_markup=keyboard,
-            )
-        else:
-            await bot.send_message(
-                chat_id=chat_id,
-                text=f"✅ <b>{product_name}</b> agregado al carrito",
-                parse_mode="HTML",
-                reply_markup=keyboard,
-            )
+        # Always send confirmation with product name (NLP response may be empty)
+        await bot.send_message(
+            chat_id=chat_id,
+            text=f"✅ <b>{product_name}</b> agregado al carrito",
+            parse_mode="HTML",
+            reply_markup=keyboard,
+        )
 
     except Exception as e:
         logger.error("Failed to add to cart: %s", e)
@@ -682,26 +673,18 @@ async def _handle_qty_change(
         client = get_client()
         chat_id = callback.message.chat.id if callback.message else 0
 
-        # Send command to NLP to change quantity
+        # Combined command: change quantity AND show updated cart (single NLP call)
         if delta > 0:
-            command = f"Aumentar cantidad del item {item_idx} del carrito en 1"
+            command = f"Aumentar cantidad del item {item_idx} del carrito en 1 y mostrar el carrito actualizado"
         else:
-            command = f"Reducir cantidad del item {item_idx} del carrito en 1"
+            command = f"Reducir cantidad del item {item_idx} del carrito en 1 y mostrar el carrito actualizado"
 
         result = await client.call_nlp_service(
             text=command,
             conversation_id=conversation_id,
         )
 
-        response = result.get("response", "Cantidad actualizada")
-
-        # Show updated cart with buttons
-        cart_result = await client.call_nlp_service(
-            text="Ver mi carrito",
-            conversation_id=conversation_id,
-        )
-
-        cart_response = cart_result.get("response", response)
+        cart_response = result.get("response", "Cantidad actualizada")
         item_count = _parse_cart_items(cart_response)
 
         # Build keyboard
@@ -812,23 +795,17 @@ async def _handle_remove_item(
         client = get_client()
         chat_id = callback.message.chat.id if callback.message else 0
 
-        # Send command to NLP to remove item
-        command = f"Eliminar el item {item_idx} del carrito"
+        # Combined command: remove item AND show updated cart (single NLP call)
+        command = (
+            f"Eliminar el item {item_idx} del carrito y mostrar el carrito actualizado"
+        )
 
         result = await client.call_nlp_service(
             text=command,
             conversation_id=conversation_id,
         )
 
-        response = result.get("response", "Producto eliminado")
-
-        # Show updated cart with buttons
-        cart_result = await client.call_nlp_service(
-            text="Ver mi carrito",
-            conversation_id=conversation_id,
-        )
-
-        cart_response = cart_result.get("response", response)
+        cart_response = result.get("response", "Producto eliminado")
         item_count = _parse_cart_items(cart_response)
 
         # Build keyboard
