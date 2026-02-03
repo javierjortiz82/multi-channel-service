@@ -17,6 +17,8 @@ Contiene:
 - API Gateway Configured
 - Intelligent Message Processing (NLP, ASR, OCR)
 - Webhook via API Gateway (IMPORTANT)
+- Shopping Cart & Checkout (Stripe Integration)
+- BANT Proactive Lead Qualification
 
 ## Cloud Run Deployment
 
@@ -548,3 +550,100 @@ gcloud run services describe nlp-service \
 | `gemini-1.5-pro` | ❌ 404 | No disponible en proyecto |
 | `gemini-2.0-flash-exp` | ❌ 429 | Resuelve a gemini-experimental |
 | `gemini-2.0-flash` | ✅ OK | **Modelo actual recomendado** |
+
+---
+
+## Shopping Cart & Checkout (2026-02-02)
+
+Sistema completo de carrito de compras con integración de Stripe para pagos.
+
+### Arquitectura
+
+```
+Usuario → Telegram → Multi-Channel → NLP Service → MCP Server (cart/checkout tools)
+                                          ↓
+                                    PostgreSQL (shopping_carts, orders)
+                                          ↓
+                                    Stripe Checkout
+```
+
+### MCP Tools Disponibles
+
+| Tool | Descripción | Trigger |
+|------|-------------|---------|
+| `add_to_cart` | Agregar producto al carrito | "lo quiero", "agregar al carrito" |
+| `view_cart` | Ver contenido del carrito | "ver carrito", "mi carrito" |
+| `update_cart_item` | Cambiar cantidad | "quiero 3 en vez de 2" |
+| `remove_from_cart` | Quitar producto | "quitar", "eliminar" |
+| `clear_cart` | Vaciar carrito | "vaciar carrito" |
+| `create_checkout_session` | Crear link de pago Stripe | "comprar", "pagar", "checkout" |
+| `get_order_status` | Ver estado de orden | "mi pedido", "estado de orden" |
+
+### Tablas de Base de Datos
+
+| Tabla | Descripción |
+|-------|-------------|
+| `shopping_carts` | Carrito por conversation_id, expira en 24h |
+| `cart_items` | Productos en carrito con precio snapshot |
+| `orders` | Órdenes con integración Stripe |
+| `order_items` | Snapshot de productos al momento de compra |
+
+### Flujo de Compra
+
+1. **Búsqueda**: Usuario busca productos → `fuzzy_search_smart`
+2. **BANT**: Agente pregunta proactivamente (Timeline, Budget, Need, Authority)
+3. **Agregar**: "lo quiero" → `add_to_cart(conversation_id, product_id, qty)`
+4. **Ver**: "mi carrito" → `view_cart(conversation_id)`
+5. **Pagar**: "quiero pagar" → `create_checkout_session(conversation_id, email)`
+6. **Stripe**: Usuario completa pago en link de Stripe
+7. **Webhook**: Stripe notifica → orden marcada como `paid`
+
+### Formato de Carrito
+
+```
+🛒 Tu Carrito
+1. Laptop HP x 1 — $999.00 = $999.00
+2. Mouse Wireless x 2 — $29.99 = $59.98
+───────────
+Subtotal: $1,058.98
+```
+
+### Formato de Orden
+
+```
+Orden ODI-20260202-0001: Pagada
+Items: 2 productos
+Total: $1,058.98 USD
+```
+
+### Secrets Requeridos
+
+| Secret | Descripción |
+|--------|-------------|
+| `stripe-secret-key` | Stripe API Key (sk_test_... o sk_live_...) |
+| `stripe-webhook-secret` | Webhook signature (whsec_...) |
+
+### Actualizar Stripe Keys
+
+```bash
+echo -n "sk_test_REAL_KEY" | gcloud secrets versions add stripe-secret-key --data-file=-
+echo -n "whsec_REAL_SECRET" | gcloud secrets versions add stripe-webhook-secret --data-file=-
+```
+
+### BANT Proactivo (Mejorado)
+
+El agente ahora pregunta BANT **obligatoriamente** después de mostrar productos:
+
+1. **Timeline**: "¿Para cuándo lo necesitas?"
+2. **Budget**: "¿Tienes un presupuesto en mente?"
+3. **Need**: "¿Es para uso personal o negocio?"
+4. **Authority**: "¿Tú decides la compra?"
+
+Después de 3+ elementos conocidos → `analyze_lead_bant()` automáticamente.
+
+### Strict Product Matching
+
+Productos con `max_similarity < 0.40` son filtrados:
+- "No encontré [producto exacto]. ¿Te puedo ayudar con algo más?"
+
+Esto evita mostrar productos no relacionados como coincidencias.

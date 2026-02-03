@@ -29,9 +29,12 @@ def mock_nlp_response() -> dict[str, Any]:
 def mock_asr_response() -> dict[str, Any]:
     """Mock ASR service response."""
     return {
-        "text": "Hello, how are you?",
-        "confidence": 0.95,
-        "language": "en",
+        "success": True,
+        "data": {
+            "transcription": "Hello, how are you?",
+            "confidence": 0.95,
+            "language": "en",
+        },
     }
 
 
@@ -41,6 +44,39 @@ def mock_ocr_response() -> dict[str, Any]:
     return {
         "text": "Invoice #12345\nTotal: $100.00",
         "confidence": 0.98,
+    }
+
+
+@pytest.fixture
+def mock_analyze_document_response() -> dict[str, Any]:
+    """Mock analyze service response for document images."""
+    return {
+        "classification": {
+            "predicted_type": "document",
+            "confidence": 0.95,
+        },
+        "ocr_result": {
+            "text": "Invoice #12345\nTotal: $100.00",
+            "confidence": 0.98,
+        },
+    }
+
+
+@pytest.fixture
+def mock_analyze_object_response() -> dict[str, Any]:
+    """Mock analyze service response for object images."""
+    return {
+        "classification": {
+            "predicted_type": "object",
+            "confidence": 0.92,
+        },
+        "detection_result": {
+            "objects": [
+                {"name": "Watch", "confidence": 0.95, "mid": "/m/0bt9lr"},
+                {"name": "Wristwatch", "confidence": 0.88, "mid": "/m/07k1x"},
+            ],
+        },
+        "image_description": "silver analog wristwatch with metal band",
     }
 
 
@@ -259,10 +295,10 @@ class TestMessageProcessor:
         self,
         mock_photo_message: MagicMock,
         mock_bot: MagicMock,
-        mock_ocr_response: dict[str, Any],
+        mock_analyze_document_response: dict[str, Any],
         mock_nlp_response: dict[str, Any],
     ) -> None:
-        """Test successful photo message processing."""
+        """Test successful photo message processing with document image."""
         processor = MessageProcessor()
 
         # Mock file download for photo
@@ -276,9 +312,9 @@ class TestMessageProcessor:
         with (
             patch.object(
                 processor._client,
-                "call_ocr_service",
+                "call_analyze_service",
                 new_callable=AsyncMock,
-                return_value=mock_ocr_response,
+                return_value=mock_analyze_document_response,
             ),
             patch.object(
                 processor._client,
@@ -293,6 +329,8 @@ class TestMessageProcessor:
 
         assert result.status == ProcessingStatus.SUCCESS
         assert result.response == mock_nlp_response["response"]
+        assert result.raw_response is not None
+        assert result.raw_response.get("image_type") == "document"
 
     @pytest.mark.asyncio
     async def test_process_photo_no_text(
@@ -300,7 +338,7 @@ class TestMessageProcessor:
         mock_photo_message: MagicMock,
         mock_bot: MagicMock,
     ) -> None:
-        """Test photo processing when OCR finds no text."""
+        """Test photo processing when document has no text."""
         processor = MessageProcessor()
 
         mock_file = MagicMock()
@@ -310,18 +348,115 @@ class TestMessageProcessor:
             return_value=io.BytesIO(b"fake image content")
         )
 
+        # Mock analyze response with document type but no text
+        mock_analyze_no_text = {
+            "classification": {
+                "predicted_type": "document",
+                "confidence": 0.85,
+            },
+            "ocr_result": {
+                "text": "",
+            },
+        }
+
         with patch.object(
             processor._client,
-            "call_ocr_service",
+            "call_analyze_service",
             new_callable=AsyncMock,
-            return_value={"text": ""},
+            return_value=mock_analyze_no_text,
         ):
             result = await processor.process_message(
                 mock_photo_message, InputType.PHOTO, mock_bot
             )
 
         assert result.status == ProcessingStatus.SUCCESS
-        assert "imagen" in result.response.lower()
+        assert "image" in result.response.lower() or "imagen" in result.response.lower()
+
+    @pytest.mark.asyncio
+    async def test_process_photo_object_detection(
+        self,
+        mock_photo_message: MagicMock,
+        mock_bot: MagicMock,
+        mock_analyze_object_response: dict[str, Any],
+        mock_nlp_response: dict[str, Any],
+    ) -> None:
+        """Test photo processing with object detection (product search flow)."""
+        processor = MessageProcessor()
+
+        mock_file = MagicMock()
+        mock_file.file_path = "photos/file_123.jpg"
+        mock_bot.get_file = AsyncMock(return_value=mock_file)
+        mock_bot.download_file = AsyncMock(
+            return_value=io.BytesIO(b"fake image content")
+        )
+
+        with (
+            patch.object(
+                processor._client,
+                "call_analyze_service",
+                new_callable=AsyncMock,
+                return_value=mock_analyze_object_response,
+            ),
+            patch.object(
+                processor._client,
+                "call_nlp_service",
+                new_callable=AsyncMock,
+                return_value=mock_nlp_response,
+            ),
+        ):
+            result = await processor.process_message(
+                mock_photo_message, InputType.PHOTO, mock_bot
+            )
+
+        assert result.status == ProcessingStatus.SUCCESS
+        assert result.response == mock_nlp_response["response"]
+        assert result.raw_response is not None
+        assert result.raw_response.get("image_type") == "object"
+        assert result.raw_response.get("detected_objects") == ["Watch", "Wristwatch"]
+
+    @pytest.mark.asyncio
+    async def test_process_photo_no_objects_detected(
+        self,
+        mock_photo_message: MagicMock,
+        mock_bot: MagicMock,
+    ) -> None:
+        """Test photo processing when no objects are detected."""
+        processor = MessageProcessor()
+
+        mock_file = MagicMock()
+        mock_file.file_path = "photos/file_123.jpg"
+        mock_bot.get_file = AsyncMock(return_value=mock_file)
+        mock_bot.download_file = AsyncMock(
+            return_value=io.BytesIO(b"fake image content")
+        )
+
+        # Mock analyze response with object type but no detections
+        mock_analyze_no_objects = {
+            "classification": {
+                "predicted_type": "object",
+                "confidence": 0.70,
+            },
+            "detection_result": {
+                "objects": [],
+                "description": "",
+            },
+        }
+
+        with patch.object(
+            processor._client,
+            "call_analyze_service",
+            new_callable=AsyncMock,
+            return_value=mock_analyze_no_objects,
+        ):
+            result = await processor.process_message(
+                mock_photo_message, InputType.PHOTO, mock_bot
+            )
+
+        assert result.status == ProcessingStatus.SUCCESS
+        # Should return no_objects_detected message
+        assert (
+            "object" in result.response.lower() or "objeto" in result.response.lower()
+        )
 
     @pytest.mark.asyncio
     async def test_process_unsupported_type(
