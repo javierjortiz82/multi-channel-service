@@ -19,6 +19,7 @@ Contiene:
 - Webhook via API Gateway (IMPORTANT)
 - Shopping Cart & Checkout (Stripe Integration)
 - BANT Proactive Lead Qualification
+- Phase 1 UX: Product Cards with Images & Buttons (2026-02-03)
 
 ## Cloud Run Deployment
 

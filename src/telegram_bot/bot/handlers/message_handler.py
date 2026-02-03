@@ -35,9 +35,15 @@ from aiogram.exceptions import TelegramAPIError
 from aiogram.filters import Command
 from aiogram.types import Message
 
+from telegram_bot.components import send_product_card
 from telegram_bot.logging_config import get_logger
 from telegram_bot.services.input_classifier import InputClassifier
-from telegram_bot.services.message_processor import ProcessingStatus, get_processor
+from telegram_bot.services.message_processor import (
+    ProcessingResult,
+    ProcessingStatus,
+    get_processor,
+)
+from telegram_bot.services.product_cache import get_product_cache
 from telegram_bot.utils.typing_indicator import continuous_typing
 
 logger = get_logger("handlers.message")
@@ -63,6 +69,80 @@ async def _safe_answer(message: Message, text: str) -> None:
         await message.answer(text)
     except TelegramAPIError as e:
         logger.warning("Failed to send message to chat %d: %s", message.chat.id, e)
+
+
+def _extract_products_from_response(result: ProcessingResult) -> list[dict[str, Any]]:
+    """Extract product data from processing result if available.
+
+    Checks raw_response for product data from NLP service function calls.
+
+    Args:
+        result: The processing result from message processor.
+
+    Returns:
+        List of product dictionaries, or empty list if none found.
+    """
+    if not result.raw_response:
+        return []
+
+    # Check for products in NLP response (from MCP tool calls)
+    nlp_response = result.raw_response.get("nlp", result.raw_response)
+
+    # Look for products in various possible locations
+    products = nlp_response.get("products", [])
+    if products and isinstance(products, list):
+        return list(products)
+
+    # Check for items from search results
+    items = nlp_response.get("items", [])
+    if items and isinstance(items, list):
+        return list(items)
+
+    return []
+
+
+async def _send_response_with_products(
+    message: Message,
+    bot: Bot,
+    result: ProcessingResult,
+) -> None:
+    """Send response, using product cards if products are available.
+
+    Args:
+        message: The original message to reply to.
+        bot: The Bot instance.
+        result: The processing result with response and optional products.
+    """
+    # Extract products from response
+    products = _extract_products_from_response(result)
+
+    if products and len(products) > 0:
+        # Store products in cache for pagination navigation
+        cache = get_product_cache()
+        cache.store(message.chat.id, products)
+
+        # Send first product as card with pagination
+        first_product = products[0]
+        total = len(products)
+
+        logger.info(
+            "Sending product card: %s (%d total, cached for navigation)",
+            first_product.get("name", "Unknown"),
+            total,
+        )
+
+        # Send product card (no additional text - card is self-explanatory)
+        await send_product_card(
+            bot=bot,
+            chat_id=message.chat.id,
+            product=first_product,
+            page=0,
+            total=total,
+        )
+        # Product cards are self-contained, no need to send duplicate text
+    elif result.response:
+        # No products, send regular text response
+        await _safe_answer(message, result.response)
 
 
 # Welcome message for /start command
@@ -201,8 +281,8 @@ def create_message_router() -> Router:
         async with continuous_typing(bot, message.chat.id):
             result = await processor.process_message(message, input_type, bot)
 
-        if result.response:
-            await _safe_answer(message, result.response)
+        # Send response with product cards if available
+        await _send_response_with_products(message, bot, result)
 
     # Register voice handler
     @router.message(F.voice)
@@ -215,8 +295,8 @@ def create_message_router() -> Router:
         async with continuous_typing(bot, message.chat.id):
             result = await processor.process_message(message, input_type, bot)
 
-        if result.response:
-            await _safe_answer(message, result.response)
+        # Send response with product cards if available
+        await _send_response_with_products(message, bot, result)
 
     # Register audio handler
     @router.message(F.audio)
@@ -229,8 +309,8 @@ def create_message_router() -> Router:
         async with continuous_typing(bot, message.chat.id):
             result = await processor.process_message(message, input_type, bot)
 
-        if result.response:
-            await _safe_answer(message, result.response)
+        # Send response with product cards if available
+        await _send_response_with_products(message, bot, result)
 
     # Register photo handler
     @router.message(F.photo)
@@ -243,8 +323,8 @@ def create_message_router() -> Router:
         async with continuous_typing(bot, message.chat.id):
             result = await processor.process_message(message, input_type, bot)
 
-        if result.response:
-            await _safe_answer(message, result.response)
+        # Send response with product cards if available
+        await _send_response_with_products(message, bot, result)
 
     # Register fallback handler
     @router.message()

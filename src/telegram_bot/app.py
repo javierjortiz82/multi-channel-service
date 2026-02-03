@@ -19,6 +19,7 @@ from pydantic import ValidationError
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from telegram_bot.bot.handlers import create_message_router
+from telegram_bot.callbacks.product_callbacks import create_callback_router
 from telegram_bot.config.settings import Settings, get_settings
 from telegram_bot.logging_config import get_logger, setup_logging
 from telegram_bot.services.internal_client import warmup_client
@@ -233,6 +234,7 @@ def create_dispatcher() -> Dispatcher:
     """
     dp = Dispatcher()
     dp.include_router(create_message_router())
+    dp.include_router(create_callback_router())
     return dp
 
 
