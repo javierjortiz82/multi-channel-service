@@ -33,11 +33,11 @@ from telegram_bot.components.product_card import (
     _get_button_label,
     build_product_keyboard,
     format_product_caption,
+    format_product_caption_expanded,
 )
 from telegram_bot.logging_config import get_logger
 from telegram_bot.services.internal_client import get_client
 from telegram_bot.services.product_cache import get_product_cache
-from telegram_bot.utils.formatting import format_price
 
 logger = get_logger("callbacks.product")
 
@@ -78,8 +78,10 @@ def create_callback_router() -> Router:
             chat_id,
         )
 
-        if action == "details":
-            await _handle_details(callback, product_id, chat_id, bot)
+        if action in ("details", "show"):
+            await _handle_show(callback, product_id, page, total, chat_id, bot)
+        elif action == "hide":
+            await _handle_hide(callback, product_id, page, total, chat_id, bot)
         elif action == "cart":
             await _handle_add_to_cart(callback, product_id, chat_id, bot)
         elif action in ("prev", "next"):
@@ -207,182 +209,168 @@ def _collect_product_images(product: dict[str, Any]) -> list[str]:
     return images
 
 
-async def _handle_details(
+async def _handle_show(
     callback: CallbackQuery,
     product_id: int,
+    page: int,
+    total: int,
     chat_id: int,
     bot: Bot,
 ) -> None:
-    """Handle product details request.
+    """Handle expand product details in-place.
 
-    Shows full product details with all images and complete information.
+    Edits the existing message caption to show full details and sends
+    gallery images as a separate media group (only on first expand).
 
     Args:
         callback: The callback query
         product_id: Product ID to show details for
+        page: Current page index
+        total: Total number of products
         chat_id: The chat ID
         bot: The Bot instance
     """
     await callback.answer()
 
-    # Get product from cache
     cache = get_product_cache()
     products = cache.get(chat_id)
-
-    # Find product by ID
     product = next((p for p in products if p.get("id") == product_id), None)
 
     if not product:
-        await callback.answer("Producto no encontrado", show_alert=True)
+        await callback.answer("Productos expirados. Busca de nuevo.", show_alert=True)
         return
 
-    # Extract all product fields
-    name = product.get("name", "Producto")
-    price_str = format_price(product.get("price"))
-    description = product.get("description", "")
-    brand = product.get("brand", "")
-    category = product.get("category", "")
-    sku = product.get("sku", "")
-    stock = product.get("stock", "")
-    condition = product.get("condition", "")
-    warranty = product.get("warranty", "")
-
-    # Real estate fields
-    bedrooms = product.get("bedrooms", "")
-    bathrooms = product.get("bathrooms", "")
-    sqft_raw = product.get("sqft", "") or product.get("area", "")
-    location = product.get("location", "")
-    year_built = product.get("year_built", "")
-    property_type = product.get("property_type", "")
-
-    # Format sqft
-    try:
-        sqft = int(float(sqft_raw)) if sqft_raw else 0
-    except (ValueError, TypeError):
-        sqft = 0
-
-    # Build detailed message - ONLY show details not in main card
-    details = f"<b>📋 DETALLES: {name}</b>\n"
-    details += "─" * 20 + "\n\n"
-
-    # Price (always show)
-    details += f"💰 <b>Precio:</b> {price_str}\n\n"
-
-    # Product specs section
-    specs_added = False
-
-    if brand:
-        details += f"🏷️ <b>Marca:</b> {brand}\n"
-        specs_added = True
-    if category:
-        details += f"📁 <b>Categoría:</b> {category}\n"
-        specs_added = True
-    if sku:
-        details += f"🔢 <b>SKU:</b> {sku}\n"
-        specs_added = True
-    if stock:
-        details += f"📦 <b>Stock:</b> {stock}\n"
-        specs_added = True
-    if condition:
-        details += f"✨ <b>Condición:</b> {condition}\n"
-        specs_added = True
-    if warranty:
-        details += f"🛡️ <b>Garantía:</b> {warranty}\n"
-        specs_added = True
-
-    # Real estate section
-    if location:
-        if specs_added:
-            details += "\n"
-        details += f"📍 <b>Ubicación:</b> {location}\n"
-        specs_added = True
-    if property_type:
-        details += f"🏠 <b>Tipo:</b> {property_type}\n"
-    if bedrooms:
-        details += f"🛏️ <b>Habitaciones:</b> {bedrooms}\n"
-    if bathrooms:
-        details += f"🚿 <b>Baños:</b> {bathrooms}\n"
-    if sqft:
-        details += f"📐 <b>Área:</b> {sqft:,} sq ft\n"
-    if year_built:
-        details += f"📅 <b>Año:</b> {year_built}\n"
-
-    # Description section (full, not truncated)
-    if description:
-        details += "\n" + "─" * 20 + "\n"
-        details += f"<b>📝 Descripción:</b>\n{description}\n"
-
-    # Get cached language for localized buttons
     lang = _get_user_language(callback, chat_id)
-
-    # Keyboard with actions
-    keyboard = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text=_get_button_label("add_to_cart", lang),
-                    callback_data=ProductCallback(
-                        action="cart",
-                        product_id=product_id,
-                    ).pack(),
-                ),
-            ],
-        ]
+    caption = format_product_caption_expanded(product)
+    keyboard = build_product_keyboard(
+        product_id=product_id,
+        page=page,
+        total=total,
+        show_pagination=(total > 1),
+        language_code=lang,
+        expanded=True,
     )
 
-    # Collect all images
-    images = _collect_product_images(product)
-
+    message = callback.message
     try:
-        if len(images) > 1:
-            # Send multiple images as media group (max 10)
-            media_group = [
-                InputMediaPhoto(
-                    media=img,
-                    caption=details if i == 0 else None,
-                    parse_mode="HTML" if i == 0 else None,
-                )
-                for i, img in enumerate(images[:10])
-            ]
-            await bot.send_media_group(chat_id=chat_id, media=media_group)
-
-            # Send keyboard separately (media groups don't support inline keyboards)
-            await bot.send_message(
-                chat_id=chat_id,
-                text=_get_button_label("interested", lang),
-                reply_markup=keyboard,
-            )
-        elif images:
-            # Single image with caption
-            await bot.send_photo(
-                chat_id=chat_id,
-                photo=images[0],
-                caption=details,
+        if message and isinstance(message, Message) and message.photo:
+            await message.edit_caption(
+                caption=caption,
                 parse_mode="HTML",
                 reply_markup=keyboard,
             )
-        else:
-            # No images - text only
-            await bot.send_message(
-                chat_id=chat_id,
-                text=details,
+        elif message and isinstance(message, Message):
+            await message.edit_text(
+                text=caption,
                 parse_mode="HTML",
                 reply_markup=keyboard,
             )
-
     except Exception as e:
-        logger.error("Failed to send product details: %s", e)
-        # Fallback to text only
+        logger.error("Failed to edit message for expand: %s", e)
         try:
             await bot.send_message(
                 chat_id=chat_id,
-                text=details,
+                text=caption,
                 parse_mode="HTML",
                 reply_markup=keyboard,
             )
         except Exception as e2:
-            logger.error("Fallback also failed: %s", e2)
-            await callback.answer("Error mostrando detalles", show_alert=True)
+            logger.error("Fallback send also failed: %s", e2)
+
+    # Send gallery images (only on first expand for this product)
+    if not cache.is_gallery_sent(chat_id, product_id):
+        images = _collect_product_images(product)
+        # Gallery = all images except the main one (already shown in card)
+        gallery_images = images[1:] if len(images) > 1 else []
+
+        if gallery_images:
+            name = product.get("name", "Producto")
+            gallery_label = _get_button_label("gallery_caption", lang).replace(
+                "{name}", name
+            )
+            try:
+                media_group = [
+                    InputMediaPhoto(
+                        media=img,
+                        caption=gallery_label if i == 0 else None,
+                        parse_mode="HTML" if i == 0 else None,
+                    )
+                    for i, img in enumerate(gallery_images[:10])
+                ]
+                await bot.send_media_group(chat_id=chat_id, media=media_group)
+            except Exception as e:
+                logger.warning("Failed to send gallery: %s", e)
+
+        cache.mark_gallery_sent(chat_id, product_id)
+
+
+async def _handle_hide(
+    callback: CallbackQuery,
+    product_id: int,
+    page: int,
+    total: int,
+    chat_id: int,
+    bot: Bot,
+) -> None:
+    """Handle collapse product details back to compact view.
+
+    Edits the existing message caption back to the compact format.
+    Gallery messages already sent remain in chat.
+
+    Args:
+        callback: The callback query
+        product_id: Product ID to collapse
+        page: Current page index
+        total: Total number of products
+        chat_id: The chat ID
+        bot: The Bot instance
+    """
+    await callback.answer()
+
+    cache = get_product_cache()
+    products = cache.get(chat_id)
+    product = next((p for p in products if p.get("id") == product_id), None)
+
+    if not product:
+        await callback.answer("Productos expirados. Busca de nuevo.", show_alert=True)
+        return
+
+    lang = _get_user_language(callback, chat_id)
+    caption = format_product_caption(product)
+    keyboard = build_product_keyboard(
+        product_id=product_id,
+        page=page,
+        total=total,
+        show_pagination=(total > 1),
+        language_code=lang,
+        expanded=False,
+    )
+
+    message = callback.message
+    try:
+        if message and isinstance(message, Message) and message.photo:
+            await message.edit_caption(
+                caption=caption,
+                parse_mode="HTML",
+                reply_markup=keyboard,
+            )
+        elif message and isinstance(message, Message):
+            await message.edit_text(
+                text=caption,
+                parse_mode="HTML",
+                reply_markup=keyboard,
+            )
+    except Exception as e:
+        logger.error("Failed to edit message for collapse: %s", e)
+        try:
+            await bot.send_message(
+                chat_id=chat_id,
+                text=caption,
+                parse_mode="HTML",
+                reply_markup=keyboard,
+            )
+        except Exception as e2:
+            logger.error("Fallback send also failed: %s", e2)
 
 
 async def _handle_add_to_cart(

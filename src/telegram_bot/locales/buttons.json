@@ -6,6 +6,9 @@
   },
   "en": {
     "details": "🔍 Details",
+    "show_details": "📋 Show Details",
+    "hide_details": "📋 Hide Details",
+    "gallery_caption": "📸 Gallery: {name}",
     "add_to_cart": "🛒 Add to Cart",
     "view_cart": "🛒 View Cart",
     "checkout": "💳 Checkout",
@@ -18,6 +21,9 @@
   },
   "es": {
     "details": "🔍 Detalles",
+    "show_details": "📋 Mostrar Detalles",
+    "hide_details": "📋 Ocultar Detalles",
+    "gallery_caption": "📸 Galería: {name}",
     "add_to_cart": "🛒 Agregar",
     "view_cart": "🛒 Ver Carrito",
     "checkout": "💳 Pagar",
@@ -30,6 +36,9 @@
   },
   "pt": {
     "details": "🔍 Detalhes",
+    "show_details": "📋 Ver Detalhes",
+    "hide_details": "📋 Ocultar Detalhes",
+    "gallery_caption": "📸 Galeria: {name}",
     "add_to_cart": "🛒 Adicionar",
     "view_cart": "🛒 Ver Carrinho",
     "checkout": "💳 Pagar",
@@ -42,6 +51,9 @@
   },
   "fr": {
     "details": "🔍 Détails",
+    "show_details": "📋 Voir Détails",
+    "hide_details": "📋 Masquer Détails",
+    "gallery_caption": "📸 Galerie: {name}",
     "add_to_cart": "🛒 Ajouter",
     "view_cart": "🛒 Voir Panier",
     "checkout": "💳 Payer",
@@ -54,6 +66,9 @@
   },
   "de": {
     "details": "🔍 Details",
+    "show_details": "📋 Details Anzeigen",
+    "hide_details": "📋 Details Verbergen",
+    "gallery_caption": "📸 Galerie: {name}",
     "add_to_cart": "🛒 Hinzufügen",
     "view_cart": "🛒 Warenkorb",
     "checkout": "💳 Bezahlen",
@@ -66,6 +81,9 @@
   },
   "ar": {
     "details": "🔍 التفاصيل",
+    "show_details": "📋 عرض التفاصيل",
+    "hide_details": "📋 إخفاء التفاصيل",
+    "gallery_caption": "📸 معرض: {name}",
     "add_to_cart": "🛒 أضف",
     "view_cart": "🛒 السلة",
     "checkout": "💳 الدفع",
@@ -78,6 +96,9 @@
   },
   "it": {
     "details": "🔍 Dettagli",
+    "show_details": "📋 Mostra Dettagli",
+    "hide_details": "📋 Nascondi Dettagli",
+    "gallery_caption": "📸 Galleria: {name}",
     "add_to_cart": "🛒 Aggiungi",
     "view_cart": "🛒 Carrello",
     "checkout": "💳 Paga",
@@ -90,6 +111,9 @@
   },
   "zh": {
     "details": "🔍 详情",
+    "show_details": "📋 显示详情",
+    "hide_details": "📋 隐藏详情",
+    "gallery_caption": "📸 图片集: {name}",
     "add_to_cart": "🛒 加入",
     "view_cart": "🛒 购物车",
     "checkout": "💳 结账",
@@ -102,6 +126,9 @@
   },
   "ja": {
     "details": "🔍 詳細",
+    "show_details": "📋 詳細を表示",
+    "hide_details": "📋 詳細を隠す",
+    "gallery_caption": "📸 ギャラリー: {name}",
     "add_to_cart": "🛒 追加",
     "view_cart": "🛒 カート",
     "checkout": "💳 支払",
@@ -114,6 +141,9 @@
   },
   "ko": {
     "details": "🔍 상세",
+    "show_details": "📋 상세 보기",
+    "hide_details": "📋 상세 숨기기",
+    "gallery_caption": "📸 갤러리: {name}",
     "add_to_cart": "🛒 담기",
     "view_cart": "🛒 장바구니",
     "checkout": "💳 결제",
@@ -126,6 +156,9 @@
   },
   "ru": {
     "details": "🔍 Детали",
+    "show_details": "📋 Показать Детали",
+    "hide_details": "📋 Скрыть Детали",
+    "gallery_caption": "📸 Галерея: {name}",
     "add_to_cart": "🛒 Добавить",
     "view_cart": "🛒 Корзина",
     "checkout": "💳 Оплата",
@@ -138,6 +171,9 @@
   },
   "hi": {
     "details": "🔍 विवरण",
+    "show_details": "📋 विवरण दिखाएं",
+    "hide_details": "📋 विवरण छिपाएं",
+    "gallery_caption": "📸 गैलरी: {name}",
     "add_to_cart": "🛒 जोड़ें",
     "view_cart": "🛒 कार्ट",
     "checkout": "💳 भुगतान",

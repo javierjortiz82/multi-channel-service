@@ -69,6 +69,9 @@ def _get_fallback_labels() -> dict[str, dict[str, str]]:
     return {
         "en": {
             "details": "🔍 Details",
+            "show_details": "📋 Show Details",
+            "hide_details": "📋 Hide Details",
+            "gallery_caption": "📸 Gallery: {name}",
             "add_to_cart": "🛒 Add to Cart",
             "view_cart": "🛒 View Cart",
             "checkout": "💳 Checkout",
@@ -181,12 +184,96 @@ def format_product_caption(
     return caption
 
 
+def format_product_caption_expanded(product: dict[str, Any]) -> str:
+    """Format expanded product caption with full details.
+
+    Builds a detailed caption including all available product fields:
+    name, price, location/brand, specs, and full description.
+    Respects the 1024-char Telegram caption limit.
+
+    Args:
+        product: Product dictionary with all product fields.
+
+    Returns:
+        Formatted HTML caption string with full details.
+    """
+    name = product.get("name", "Producto")
+    price = format_price(product.get("price"))
+    description = product.get("description", "")
+    brand = product.get("brand", "")
+    category = product.get("category", "")
+    sku = product.get("sku", "")
+    condition = product.get("condition", "")
+    warranty = product.get("warranty", "")
+    location = product.get("location", "")
+    bedrooms = product.get("bedrooms", "")
+    bathrooms = product.get("bathrooms", "")
+    sqft_raw = product.get("sqft", "") or product.get("area", "")
+
+    try:
+        sqft = int(float(sqft_raw)) if sqft_raw else 0
+    except (ValueError, TypeError):
+        sqft = 0
+
+    lines = [f"<b>{name}</b>", f"💰 <b>{price}</b>"]
+
+    # Location or brand
+    if location:
+        lines.append(f"📍 {location}")
+    elif brand:
+        lines.append(f"🏷️ {brand}")
+
+    # Specs section
+    specs_lines: list[str] = []
+    if brand and not location:
+        pass  # Already shown above
+    elif brand:
+        specs_lines.append(f"🏷️ {brand}")
+    if category:
+        specs_lines.append(f"📁 {category}")
+    if sku:
+        specs_lines.append(f"🔢 {sku}")
+    if condition:
+        specs_lines.append(f"✨ {condition}")
+    if warranty:
+        specs_lines.append(f"🛡️ {warranty}")
+
+    # Real estate specs
+    if bedrooms:
+        specs_lines.append(f"🛏️ {bedrooms} hab")
+    if bathrooms:
+        specs_lines.append(f"🚿 {bathrooms} baños")
+    if sqft:
+        specs_lines.append(f"📐 {sqft:,} sqft")
+
+    if specs_lines:
+        lines.append("─" * 20)
+        lines.extend(specs_lines)
+
+    # Full description
+    if description:
+        lines.append("─" * 20)
+        # Reserve space for header lines (~200 chars) to stay within 1024
+        max_desc = MAX_CAPTION_LENGTH - 200
+        if len(description) > max_desc:
+            description = description[: max_desc - 3] + "..."
+        lines.append(description)
+
+    caption = "\n".join(lines)
+
+    if len(caption) > MAX_CAPTION_LENGTH:
+        caption = caption[: MAX_CAPTION_LENGTH - 3] + "..."
+
+    return caption
+
+
 def build_product_keyboard(
     product_id: int,
     page: int = 0,
     total: int = 1,
     show_pagination: bool = True,
     language_code: str | None = None,
+    expanded: bool = False,
 ) -> InlineKeyboardMarkup:
     """Build inline keyboard for a product card.
 
@@ -196,18 +283,27 @@ def build_product_keyboard(
         total: Total number of products
         show_pagination: Whether to show pagination buttons
         language_code: User's language code for button labels
+        expanded: Whether the card is in expanded state
 
     Returns:
         InlineKeyboardMarkup with action and navigation buttons
     """
     keyboard: list[list[InlineKeyboardButton]] = []
 
+    # Details toggle button
+    if expanded:
+        details_label = _get_button_label("hide_details", language_code)
+        details_action = "hide"
+    else:
+        details_label = _get_button_label("show_details", language_code)
+        details_action = "show"
+
     # Action buttons row
     action_row = [
         InlineKeyboardButton(
-            text=_get_button_label("details", language_code),
+            text=details_label,
             callback_data=ProductCallback(
-                action="details",
+                action=details_action,
                 product_id=product_id,
                 page=page,
                 total=total,
