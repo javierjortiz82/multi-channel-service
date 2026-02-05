@@ -133,7 +133,7 @@ def _extract_specs(product: dict[str, Any], exclude_brand: bool = False) -> str:
 
 def format_product_caption(
     product: dict[str, Any],
-    include_description: bool = True,
+    include_description: bool = False,
     max_desc_length: int = 150,
 ) -> str:
     """Format product information as a caption for Telegram.
