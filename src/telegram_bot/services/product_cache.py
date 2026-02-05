@@ -59,7 +59,6 @@ class ProductCache:
             "products": products,
             "timestamp": time.time(),
             "language_code": language_code,
-            "expanded_galleries": set(),
         }
 
         logger.debug(
@@ -136,34 +135,6 @@ class ProductCache:
             Number of cached products.
         """
         return len(self.get(chat_id))
-
-    def mark_gallery_sent(self, chat_id: int | str, product_id: int) -> None:
-        """Track that gallery was already sent for this product.
-
-        Args:
-            chat_id: The Telegram chat ID.
-            product_id: The product ID whose gallery was sent.
-        """
-        key = str(chat_id)
-        entry = self._cache.get(key)
-        if entry and time.time() - entry["timestamp"] <= self._ttl:
-            entry["expanded_galleries"].add(product_id)
-
-    def is_gallery_sent(self, chat_id: int | str, product_id: int) -> bool:
-        """Check if gallery was already sent for this product.
-
-        Args:
-            chat_id: The Telegram chat ID.
-            product_id: The product ID to check.
-
-        Returns:
-            True if gallery was already sent, False otherwise.
-        """
-        key = str(chat_id)
-        entry = self._cache.get(key)
-        if not entry or time.time() - entry["timestamp"] > self._ttl:
-            return False
-        return product_id in entry["expanded_galleries"]
 
     def clear(self, chat_id: int | str) -> None:
         """Clear cached products for a chat session.

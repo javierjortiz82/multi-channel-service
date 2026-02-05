@@ -11,16 +11,19 @@ class ProductCallback(CallbackData, prefix="prod"):
     """Callback data for product-related actions.
 
     Attributes:
-        action: The action to perform (details, cart, prev, next, back, noop)
+        action: The action to perform (show, hide, cart, prev, next,
+                img_prev, img_next, noop)
         product_id: The product ID to act on
         page: Current page index for pagination
         total: Total number of products in the result set
+        img: Gallery image index (0=main image, 1+=gallery images)
     """
 
     action: str
     product_id: int
     page: int = 0
     total: int = 1
+    img: int = 0
 
 
 class CartCallback(CallbackData, prefix="cart"):

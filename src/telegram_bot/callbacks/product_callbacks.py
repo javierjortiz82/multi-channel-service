@@ -82,9 +82,15 @@ def create_callback_router() -> Router:
         if action in ("details", "show"):
             await _handle_show(callback, product_id, page, total, chat_id, bot)
         elif action == "hide":
-            await _handle_hide(callback, product_id, page, total, chat_id, bot)
+            await _handle_hide(
+                callback, product_id, callback_data.img, page, total, chat_id, bot
+            )
         elif action == "cart":
             await _handle_add_to_cart(callback, product_id, chat_id, bot)
+        elif action in ("img_prev", "img_next"):
+            await _handle_gallery_nav(
+                callback, product_id, callback_data.img, page, total, chat_id
+            )
         elif action in ("prev", "next"):
             # page already contains the target page (set in keyboard builder)
             await _handle_navigation(callback, chat_id, page, total, bot)
@@ -226,8 +232,8 @@ async def _handle_show(
 ) -> None:
     """Handle expand product details in-place.
 
-    Edits the existing message caption to show full details and sends
-    gallery images as a separate media group (only on first expand).
+    Edits the existing message caption to show full details and adds
+    gallery navigation buttons for browsing images in-card.
 
     Args:
         callback: The callback query
@@ -248,6 +254,9 @@ async def _handle_show(
         return
 
     lang = _get_user_language(callback, chat_id)
+    all_images = _collect_product_images(product)
+    total_imgs = len(all_images)
+
     caption = format_product_caption_expanded(product)
     keyboard = build_product_keyboard(
         product_id=product_id,
@@ -256,6 +265,8 @@ async def _handle_show(
         show_pagination=(total > 1),
         language_code=lang,
         expanded=True,
+        current_img=0,
+        total_imgs=total_imgs,
     )
 
     message = callback.message
@@ -284,36 +295,11 @@ async def _handle_show(
         except Exception as e2:
             logger.error("Fallback send also failed: %s", e2)
 
-    # Send gallery images (only on first expand for this product)
-    if not cache.is_gallery_sent(chat_id, product_id):
-        images = _collect_product_images(product)
-        # Gallery = all images except the main one (already shown in card)
-        gallery_images = images[1:] if len(images) > 1 else []
-
-        if gallery_images:
-            name = product.get("name", "Producto")
-            gallery_label = _get_button_label("gallery_caption", lang).replace(
-                "{name}", name
-            )
-            try:
-                media_group = [
-                    InputMediaPhoto(
-                        media=img,
-                        caption=gallery_label if i == 0 else None,
-                        parse_mode="HTML" if i == 0 else None,
-                    )
-                    for i, img in enumerate(gallery_images[:10])
-                ]
-                await bot.send_media_group(chat_id=chat_id, media=media_group)
-            except Exception as e:
-                logger.warning("Failed to send gallery: %s", e)
-
-        cache.mark_gallery_sent(chat_id, product_id)
-
 
 async def _handle_hide(
     callback: CallbackQuery,
     product_id: int,
+    current_img: int,
     page: int,
     total: int,
     chat_id: int,
@@ -321,12 +307,13 @@ async def _handle_hide(
 ) -> None:
     """Handle collapse product details back to compact view.
 
-    Edits the existing message caption back to the compact format.
-    Gallery messages already sent remain in chat.
+    If currently viewing a gallery image, swaps back to the main image.
+    Otherwise just updates the caption.
 
     Args:
         callback: The callback query
         product_id: Product ID to collapse
+        current_img: Current gallery image index
         page: Current page index
         total: Total number of products
         chat_id: The chat ID
@@ -356,11 +343,23 @@ async def _handle_hide(
     message = callback.message
     try:
         if message and isinstance(message, Message) and message.photo:
-            await message.edit_caption(
-                caption=caption,
-                parse_mode="HTML",
-                reply_markup=keyboard,
-            )
+            if current_img > 0:
+                # Swap back to main image + compact caption
+                main_url = product.get("image_url", "")
+                if main_url:
+                    media = InputMediaPhoto(
+                        media=main_url, caption=caption, parse_mode="HTML"
+                    )
+                    await message.edit_media(media=media, reply_markup=keyboard)
+                else:
+                    await message.edit_caption(
+                        caption=caption, parse_mode="HTML", reply_markup=keyboard
+                    )
+            else:
+                # Already on main image, just update caption
+                await message.edit_caption(
+                    caption=caption, parse_mode="HTML", reply_markup=keyboard
+                )
         elif message and isinstance(message, Message):
             await message.edit_text(
                 text=caption,
@@ -378,6 +377,75 @@ async def _handle_hide(
             )
         except Exception as e2:
             logger.error("Fallback send also failed: %s", e2)
+
+
+async def _handle_gallery_nav(
+    callback: CallbackQuery,
+    product_id: int,
+    new_img: int,
+    page: int,
+    total: int,
+    chat_id: int,
+) -> None:
+    """Handle gallery image navigation (prev/next) in-place.
+
+    Swaps the displayed photo via edit_media() without sending new messages.
+
+    Args:
+        callback: The callback query
+        product_id: Product ID being viewed
+        new_img: Target gallery image index
+        page: Current page index
+        total: Total number of products
+        chat_id: The chat ID
+    """
+    await callback.answer()
+
+    cache = get_product_cache()
+    products = cache.get(chat_id)
+    product = next((p for p in products if p.get("id") == product_id), None)
+
+    if not product:
+        await callback.answer("Productos expirados. Busca de nuevo.", show_alert=True)
+        return
+
+    all_images = _collect_product_images(product)
+    total_imgs = len(all_images)
+
+    # Validate bounds
+    if new_img < 0 or new_img >= total_imgs:
+        await callback.answer()
+        return
+
+    lang = _get_user_language(callback, chat_id)
+    target_url = all_images[new_img]
+    caption = format_product_caption_expanded(product)
+    keyboard = build_product_keyboard(
+        product_id=product_id,
+        page=page,
+        total=total,
+        show_pagination=(total > 1),
+        language_code=lang,
+        expanded=True,
+        current_img=new_img,
+        total_imgs=total_imgs,
+    )
+
+    message = callback.message
+    try:
+        if message and isinstance(message, Message) and message.photo:
+            media = InputMediaPhoto(
+                media=target_url, caption=caption, parse_mode="HTML"
+            )
+            await message.edit_media(media=media, reply_markup=keyboard)
+        elif message and isinstance(message, Message):
+            # Text-only fallback (no photo to swap)
+            await message.edit_text(
+                text=caption, parse_mode="HTML", reply_markup=keyboard
+            )
+    except Exception as e:
+        logger.error("Failed to navigate gallery image: %s", e)
+        await callback.answer("Error cargando imagen", show_alert=True)
 
 
 async def _handle_add_to_cart(

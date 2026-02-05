@@ -71,7 +71,6 @@ def _get_fallback_labels() -> dict[str, dict[str, str]]:
             "details": "🔍 Details",
             "show_details": "📋 Show Details",
             "hide_details": "📋 Hide Details",
-            "gallery_caption": "📸 Gallery: {name}",
             "add_to_cart": "🛒 Add to Cart",
             "view_cart": "🛒 View Cart",
             "checkout": "💳 Checkout",
@@ -274,6 +273,8 @@ def build_product_keyboard(
     show_pagination: bool = True,
     language_code: str | None = None,
     expanded: bool = False,
+    current_img: int = 0,
+    total_imgs: int = 1,
 ) -> InlineKeyboardMarkup:
     """Build inline keyboard for a product card.
 
@@ -284,6 +285,8 @@ def build_product_keyboard(
         show_pagination: Whether to show pagination buttons
         language_code: User's language code for button labels
         expanded: Whether the card is in expanded state
+        current_img: Current gallery image index (0=main)
+        total_imgs: Total number of images (main + gallery)
 
     Returns:
         InlineKeyboardMarkup with action and navigation buttons
@@ -307,6 +310,7 @@ def build_product_keyboard(
                 product_id=product_id,
                 page=page,
                 total=total,
+                img=current_img,
             ).pack(),
         ),
         InlineKeyboardButton(
@@ -316,10 +320,58 @@ def build_product_keyboard(
                 product_id=product_id,
                 page=page,
                 total=total,
+                img=current_img,
             ).pack(),
         ),
     ]
     keyboard.append(action_row)
+
+    # Gallery navigation row (only when expanded and multiple images)
+    if expanded and total_imgs > 1:
+        gallery_row: list[InlineKeyboardButton] = []
+
+        if current_img > 0:
+            gallery_row.append(
+                InlineKeyboardButton(
+                    text="⬅️",
+                    callback_data=ProductCallback(
+                        action="img_prev",
+                        product_id=product_id,
+                        page=page,
+                        total=total,
+                        img=current_img - 1,
+                    ).pack(),
+                )
+            )
+
+        gallery_row.append(
+            InlineKeyboardButton(
+                text=f"📸 {current_img + 1}/{total_imgs}",
+                callback_data=ProductCallback(
+                    action="noop",
+                    product_id=product_id,
+                    page=page,
+                    total=total,
+                    img=current_img,
+                ).pack(),
+            )
+        )
+
+        if current_img < total_imgs - 1:
+            gallery_row.append(
+                InlineKeyboardButton(
+                    text="➡️",
+                    callback_data=ProductCallback(
+                        action="img_next",
+                        product_id=product_id,
+                        page=page,
+                        total=total,
+                        img=current_img + 1,
+                    ).pack(),
+                )
+            )
+
+        keyboard.append(gallery_row)
 
     # Pagination row (if multiple products)
     if show_pagination and total > 1:
