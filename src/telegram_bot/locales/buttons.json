@@ -1,0 +1,151 @@
+{
+  "_meta": {
+    "description": "Button labels for Telegram inline keyboards",
+    "default_language": "en",
+    "supported_languages": ["en", "es", "pt", "fr", "de", "ar", "it", "zh", "ja", "ko", "ru", "hi"]
+  },
+  "en": {
+    "details": "🔍 Details",
+    "add_to_cart": "🛒 Add to Cart",
+    "view_cart": "🛒 View Cart",
+    "checkout": "💳 Checkout",
+    "clear_cart": "🗑️ Clear",
+    "yes_delete": "✅ Yes, delete",
+    "no_cancel": "❌ No, cancel",
+    "added_to_cart": "✅ <b>{name}</b> added to cart",
+    "delete_confirm": "🗑️ <b>Delete item {idx} from cart?</b>",
+    "interested": "Interested in this product?"
+  },
+  "es": {
+    "details": "🔍 Detalles",
+    "add_to_cart": "🛒 Agregar",
+    "view_cart": "🛒 Ver Carrito",
+    "checkout": "💳 Pagar",
+    "clear_cart": "🗑️ Vaciar",
+    "yes_delete": "✅ Sí, eliminar",
+    "no_cancel": "❌ No, cancelar",
+    "added_to_cart": "✅ <b>{name}</b> agregado al carrito",
+    "delete_confirm": "🗑️ <b>¿Eliminar el item {idx} del carrito?</b>",
+    "interested": "¿Te interesa este producto?"
+  },
+  "pt": {
+    "details": "🔍 Detalhes",
+    "add_to_cart": "🛒 Adicionar",
+    "view_cart": "🛒 Ver Carrinho",
+    "checkout": "💳 Pagar",
+    "clear_cart": "🗑️ Limpar",
+    "yes_delete": "✅ Sim, excluir",
+    "no_cancel": "❌ Não, cancelar",
+    "added_to_cart": "✅ <b>{name}</b> adicionado ao carrinho",
+    "delete_confirm": "🗑️ <b>Excluir item {idx} do carrinho?</b>",
+    "interested": "Tem interesse neste produto?"
+  },
+  "fr": {
+    "details": "🔍 Détails",
+    "add_to_cart": "🛒 Ajouter",
+    "view_cart": "🛒 Voir Panier",
+    "checkout": "💳 Payer",
+    "clear_cart": "🗑️ Vider",
+    "yes_delete": "✅ Oui, supprimer",
+    "no_cancel": "❌ Non, annuler",
+    "added_to_cart": "✅ <b>{name}</b> ajouté au panier",
+    "delete_confirm": "🗑️ <b>Supprimer l'article {idx} du panier?</b>",
+    "interested": "Ce produit vous intéresse?"
+  },
+  "de": {
+    "details": "🔍 Details",
+    "add_to_cart": "🛒 Hinzufügen",
+    "view_cart": "🛒 Warenkorb",
+    "checkout": "💳 Bezahlen",
+    "clear_cart": "🗑️ Leeren",
+    "yes_delete": "✅ Ja, löschen",
+    "no_cancel": "❌ Nein, abbrechen",
+    "added_to_cart": "✅ <b>{name}</b> zum Warenkorb hinzugefügt",
+    "delete_confirm": "🗑️ <b>Artikel {idx} aus dem Warenkorb löschen?</b>",
+    "interested": "Interesse an diesem Produkt?"
+  },
+  "ar": {
+    "details": "🔍 التفاصيل",
+    "add_to_cart": "🛒 أضف",
+    "view_cart": "🛒 السلة",
+    "checkout": "💳 الدفع",
+    "clear_cart": "🗑️ تفريغ",
+    "yes_delete": "✅ نعم، احذف",
+    "no_cancel": "❌ لا، إلغاء",
+    "added_to_cart": "✅ <b>{name}</b> أُضيف إلى السلة",
+    "delete_confirm": "🗑️ <b>حذف العنصر {idx} من السلة؟</b>",
+    "interested": "هل أنت مهتم بهذا المنتج؟"
+  },
+  "it": {
+    "details": "🔍 Dettagli",
+    "add_to_cart": "🛒 Aggiungi",
+    "view_cart": "🛒 Carrello",
+    "checkout": "💳 Paga",
+    "clear_cart": "🗑️ Svuota",
+    "yes_delete": "✅ Sì, elimina",
+    "no_cancel": "❌ No, annulla",
+    "added_to_cart": "✅ <b>{name}</b> aggiunto al carrello",
+    "delete_confirm": "🗑️ <b>Eliminare l'articolo {idx} dal carrello?</b>",
+    "interested": "Ti interessa questo prodotto?"
+  },
+  "zh": {
+    "details": "🔍 详情",
+    "add_to_cart": "🛒 加入",
+    "view_cart": "🛒 购物车",
+    "checkout": "💳 结账",
+    "clear_cart": "🗑️ 清空",
+    "yes_delete": "✅ 是，删除",
+    "no_cancel": "❌ 否，取消",
+    "added_to_cart": "✅ <b>{name}</b> 已加入购物车",
+    "delete_confirm": "🗑️ <b>删除购物车中的第{idx}件商品？</b>",
+    "interested": "对这个产品感兴趣吗？"
+  },
+  "ja": {
+    "details": "🔍 詳細",
+    "add_to_cart": "🛒 追加",
+    "view_cart": "🛒 カート",
+    "checkout": "💳 支払",
+    "clear_cart": "🗑️ 空に",
+    "yes_delete": "✅ はい、削除",
+    "no_cancel": "❌ いいえ",
+    "added_to_cart": "✅ <b>{name}</b> をカートに追加しました",
+    "delete_confirm": "🗑️ <b>アイテム{idx}をカートから削除しますか？</b>",
+    "interested": "この商品に興味がありますか？"
+  },
+  "ko": {
+    "details": "🔍 상세",
+    "add_to_cart": "🛒 담기",
+    "view_cart": "🛒 장바구니",
+    "checkout": "💳 결제",
+    "clear_cart": "🗑️ 비우기",
+    "yes_delete": "✅ 예, 삭제",
+    "no_cancel": "❌ 아니오",
+    "added_to_cart": "✅ <b>{name}</b> 장바구니에 추가됨",
+    "delete_confirm": "🗑️ <b>장바구니에서 항목 {idx}을(를) 삭제하시겠습니까?</b>",
+    "interested": "이 제품에 관심이 있으신가요?"
+  },
+  "ru": {
+    "details": "🔍 Детали",
+    "add_to_cart": "🛒 Добавить",
+    "view_cart": "🛒 Корзина",
+    "checkout": "💳 Оплата",
+    "clear_cart": "🗑️ Очистить",
+    "yes_delete": "✅ Да, удалить",
+    "no_cancel": "❌ Нет, отмена",
+    "added_to_cart": "✅ <b>{name}</b> добавлен в корзину",
+    "delete_confirm": "🗑️ <b>Удалить товар {idx} из корзины?</b>",
+    "interested": "Интересует этот товар?"
+  },
+  "hi": {
+    "details": "🔍 विवरण",
+    "add_to_cart": "🛒 जोड़ें",
+    "view_cart": "🛒 कार्ट",
+    "checkout": "💳 भुगतान",
+    "clear_cart": "🗑️ खाली",
+    "yes_delete": "✅ हाँ, हटाएं",
+    "no_cancel": "❌ नहीं, रद्द करें",
+    "added_to_cart": "✅ <b>{name}</b> कार्ट में जोड़ा गया",
+    "delete_confirm": "🗑️ <b>कार्ट से आइटम {idx} हटाएं?</b>",
+    "interested": "क्या आप इस उत्पाद में रुचि रखते हैं?"
+  }
+}
