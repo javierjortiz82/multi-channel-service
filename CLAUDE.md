@@ -10,6 +10,44 @@ Contiene:
 
 ---
 
+## Code Quality Rules
+
+### Mandatory Standards
+
+1. **No hardcoded strings**: All user-facing messages must be in `locales/messages.json` or `locales/buttons.json`
+2. **English docstrings**: All function/class docstrings must be written in English
+3. **DRY utilities**: Shared code goes in `utils/` (e.g., `formatting.py`, `i18n.py`)
+4. **KISS principle**: No over-engineering; minimum complexity for current requirements
+5. **No deprecated packages**: Use `ruff` for lint/format (not `black`/`isort`)
+6. **Module-level imports**: No inline imports except in `TYPE_CHECKING` blocks
+
+### Key Utility Modules
+
+| Module | Purpose |
+|--------|---------|
+| `utils/formatting.py` | `format_price()` - consistent price formatting with currency |
+| `utils/i18n.py` | `normalize_language_code()`, `get_localized_message()` - i18n helpers |
+| `locales/messages.json` | Error messages, start/help messages (multilingual) |
+| `locales/buttons.json` | Inline keyboard button labels (multilingual) |
+
+### Service URLs
+
+Service URLs are configured via `config/settings.py` Pydantic fields:
+- `nlp_service_url` (env: `NLP_SERVICE_URL`)
+- `asr_service_url` (env: `ASR_SERVICE_URL`)
+- `ocr_service_url` (env: `OCR_SERVICE_URL`)
+
+### Verification Commands
+
+```bash
+ruff check src/                    # Lint
+ruff format --check src/           # Format check
+mypy src/telegram_bot/             # Type check
+pytest                             # Run tests
+```
+
+---
+
 - Bot Funcional
 - DocString
 - Security Hardening

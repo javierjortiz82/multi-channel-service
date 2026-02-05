@@ -15,6 +15,9 @@ Example:
     )
 """
 
+import json
+from functools import lru_cache
+from pathlib import Path
 from typing import Any
 
 from aiogram import Bot
@@ -22,41 +25,85 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from telegram_bot.callbacks.callback_data import ProductCallback
 from telegram_bot.logging_config import get_logger
+from telegram_bot.utils.formatting import format_price
+from telegram_bot.utils.i18n import normalize_language_code
 
 logger = get_logger("components.product_card")
 
 # Maximum caption length for Telegram photos
 MAX_CAPTION_LENGTH = 1024
 
+# Path to locales directory
+LOCALES_DIR = Path(__file__).parent.parent / "locales"
+DEFAULT_LANGUAGE = "en"
 
-def _format_price(price: float | int | str | None) -> str:
-    """Format price with thousands separator.
 
-    Args:
-        price: The price value to format
+@lru_cache(maxsize=1)
+def _load_button_labels() -> dict[str, dict[str, str]]:
+    """Load button labels from JSON file.
+
+    Uses LRU cache to load file only once at startup.
 
     Returns:
-        Formatted price string
+        Dictionary of language codes to button labels.
     """
-    if price is None:
-        return "Consultar"
+    buttons_file = LOCALES_DIR / "buttons.json"
+
     try:
-        price_float = float(price)
-        if price_float >= 1_000_000:
-            return f"${price_float:,.0f}"
-        elif price_float >= 1000:
-            return f"${price_float:,.2f}"
-        else:
-            return f"${price_float:.2f}"
-    except (ValueError, TypeError):
-        return str(price)
+        with buttons_file.open(encoding="utf-8") as f:
+            data = json.load(f)
+            # Remove _meta key if present
+            data.pop("_meta", None)
+            logger.info("Loaded button labels for %d languages", len(data))
+            return data
+    except FileNotFoundError:
+        logger.warning("Button labels file not found: %s", buttons_file)
+        return _get_fallback_labels()
+    except json.JSONDecodeError as e:
+        logger.error("Invalid JSON in button labels: %s", e)
+        return _get_fallback_labels()
 
 
-def _extract_specs(product: dict[str, Any]) -> str:
+def _get_fallback_labels() -> dict[str, dict[str, str]]:
+    """Return fallback labels if JSON file is unavailable."""
+    return {
+        "en": {
+            "details": "🔍 Details",
+            "add_to_cart": "🛒 Add to Cart",
+            "view_cart": "🛒 View Cart",
+            "checkout": "💳 Checkout",
+            "clear_cart": "🗑️ Clear",
+        },
+    }
+
+
+def _get_button_label(key: str, language_code: str | None) -> str:
+    """Get localized button label.
+
+    Args:
+        key: Button key (e.g., 'details', 'add_to_cart')
+        language_code: User's language code (e.g., 'en', 'es', 'es-MX')
+
+    Returns:
+        Localized button label
+    """
+    labels = _load_button_labels()
+    lang = normalize_language_code(language_code)
+    lang_labels = labels.get(lang, labels.get(DEFAULT_LANGUAGE, {}))
+    default_labels = labels.get(DEFAULT_LANGUAGE, {})
+    label = lang_labels.get(key, default_labels.get(key, key))
+    logger.debug(
+        "Button label: key=%s, input_lang=%s, resolved=%s", key, language_code, lang
+    )
+    return label
+
+
+def _extract_specs(product: dict[str, Any], exclude_brand: bool = False) -> str:
     """Extract and format product specifications.
 
     Args:
         product: Product dictionary
+        exclude_brand: If True, don't include brand in specs (already shown elsewhere)
 
     Returns:
         Formatted specifications string
@@ -72,8 +119,8 @@ def _extract_specs(product: dict[str, Any]) -> str:
         area = product.get("sqft") or product.get("area")
         specs.append(f"📐 {area:,} sqft")
 
-    # Electronics/General specs
-    if product.get("brand") and not specs:
+    # Electronics/General specs (only if no real estate specs)
+    if not exclude_brand and product.get("brand") and not specs:
         specs.append(f"🏷️ {product['brand']}")
     if product.get("category") and not specs:
         specs.append(f"📦 {product['category']}")
@@ -97,7 +144,7 @@ def format_product_caption(
         Formatted HTML caption string
     """
     name = product.get("name", "Producto")
-    price = _format_price(product.get("price"))
+    price = format_price(product.get("price"))
     description = product.get("description", "")
     location = product.get("location", "")
     brand = product.get("brand", "")
@@ -106,13 +153,16 @@ def format_product_caption(
     lines = [f"<b>{name}</b>"]
     lines.append(f"💰 <b>{price}</b>")
 
+    # Track if brand was already shown
+    brand_shown = False
     if location:
         lines.append(f"📍 {location}")
     elif brand:
         lines.append(f"🏷️ {brand}")
+        brand_shown = True
 
-    # Add specs
-    specs = _extract_specs(product)
+    # Add specs (exclude brand if already shown above)
+    specs = _extract_specs(product, exclude_brand=brand_shown)
     if specs:
         lines.append(specs)
 
@@ -136,6 +186,7 @@ def build_product_keyboard(
     page: int = 0,
     total: int = 1,
     show_pagination: bool = True,
+    language_code: str | None = None,
 ) -> InlineKeyboardMarkup:
     """Build inline keyboard for a product card.
 
@@ -144,6 +195,7 @@ def build_product_keyboard(
         page: Current page index
         total: Total number of products
         show_pagination: Whether to show pagination buttons
+        language_code: User's language code for button labels
 
     Returns:
         InlineKeyboardMarkup with action and navigation buttons
@@ -153,7 +205,7 @@ def build_product_keyboard(
     # Action buttons row
     action_row = [
         InlineKeyboardButton(
-            text="🔍 Detalles",
+            text=_get_button_label("details", language_code),
             callback_data=ProductCallback(
                 action="details",
                 product_id=product_id,
@@ -162,7 +214,7 @@ def build_product_keyboard(
             ).pack(),
         ),
         InlineKeyboardButton(
-            text="🛒 Agregar",
+            text=_get_button_label("add_to_cart", language_code),
             callback_data=ProductCallback(
                 action="cart",
                 product_id=product_id,
@@ -229,6 +281,7 @@ async def send_product_card(
     product: dict[str, Any],
     page: int = 0,
     total: int = 1,
+    language_code: str | None = None,
 ) -> Message | None:
     """Send a product card with image and action buttons.
 
@@ -238,6 +291,7 @@ async def send_product_card(
         product: Product dictionary with id, name, price, image_url, etc.
         page: Current page index for pagination
         total: Total number of products in result set
+        language_code: User's language code for button labels
 
     Returns:
         The sent Message object, or None if sending failed
@@ -253,6 +307,7 @@ async def send_product_card(
         page=page,
         total=total,
         show_pagination=(total > 1),
+        language_code=language_code,
     )
 
     try:
@@ -298,6 +353,7 @@ async def send_product_list(
     products: list[dict[str, Any]],
     header: str | None = None,
     max_products: int = 5,
+    language_code: str | None = None,
 ) -> list[Message]:
     """Send a list of product cards.
 
@@ -310,6 +366,7 @@ async def send_product_list(
         products: List of product dictionaries
         header: Optional header message before products
         max_products: Maximum products to include in pagination
+        language_code: User's language code for button labels
 
     Returns:
         List of sent Message objects
@@ -343,6 +400,7 @@ async def send_product_list(
             product=products[0],
             page=0,
             total=total,
+            language_code=language_code,
         )
         if product_msg:
             messages.append(product_msg)

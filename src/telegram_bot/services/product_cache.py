@@ -36,12 +36,18 @@ class ProductCache:
         self._ttl = ttl
         self._max_size = max_size
 
-    def store(self, chat_id: int | str, products: list[dict[str, Any]]) -> None:
+    def store(
+        self,
+        chat_id: int | str,
+        products: list[dict[str, Any]],
+        language_code: str | None = None,
+    ) -> None:
         """Store products for a chat session.
 
         Args:
             chat_id: The Telegram chat ID.
             products: List of product dictionaries to cache.
+            language_code: Detected language code to use for button labels.
         """
         key = str(chat_id)
 
@@ -52,6 +58,7 @@ class ProductCache:
         self._cache[key] = {
             "products": products,
             "timestamp": time.time(),
+            "language_code": language_code,
         }
 
         logger.debug(
@@ -97,6 +104,26 @@ class ProductCache:
         if 0 <= index < len(products):
             return products[index]
         return None
+
+    def get_language(self, chat_id: int | str) -> str | None:
+        """Get the cached language code for a chat session.
+
+        Args:
+            chat_id: The Telegram chat ID.
+
+        Returns:
+            Language code string or None if not found/expired.
+        """
+        key = str(chat_id)
+        entry = self._cache.get(key)
+
+        if not entry:
+            return None
+
+        if time.time() - entry["timestamp"] > self._ttl:
+            return None
+
+        return entry.get("language_code")
 
     def get_count(self, chat_id: int | str) -> int:
         """Get the number of cached products.

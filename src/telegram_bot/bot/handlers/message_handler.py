@@ -22,9 +22,8 @@ Example:
         dp = Dispatcher()
         dp.include_router(create_message_router())
 
-Attributes:
-    START_MESSAGE: Welcome message displayed for /start command.
-    HELP_MESSAGE: Help text displayed for /help command.
+Note:
+    Start and help messages are loaded from locales/messages.json.
 """
 
 from collections.abc import Awaitable, Callable
@@ -44,6 +43,7 @@ from telegram_bot.services.message_processor import (
     get_processor,
 )
 from telegram_bot.services.product_cache import get_product_cache
+from telegram_bot.utils.i18n import get_localized_message
 from telegram_bot.utils.typing_indicator import continuous_typing
 
 logger = get_logger("handlers.message")
@@ -101,10 +101,55 @@ def _extract_products_from_response(result: ProcessingResult) -> list[dict[str, 
     return []
 
 
+def _extract_detected_language(result: ProcessingResult) -> str | None:
+    """Extract detected language from NLP response.
+
+    Args:
+        result: The processing result from message processor.
+
+    Returns:
+        ISO 639-1 language code (e.g., 'en', 'es') or None.
+    """
+    if not result.raw_response:
+        return None
+
+    nlp_response = result.raw_response.get("nlp", result.raw_response)
+    return nlp_response.get("detected_language")
+
+
+async def _process_and_respond(
+    message: Message,
+    bot: Bot,
+    classifier: InputClassifier,
+) -> None:
+    """Process a message and send the response.
+
+    Shared handler logic for text, voice, audio, and photo messages.
+
+    Args:
+        message: The Telegram message to process.
+        bot: The Bot instance.
+        classifier: The input classifier instance.
+    """
+    input_type = classifier.classify(message)
+    processor = get_processor()
+
+    # Continuous typing indicator - refreshes every 4s while LLM processes
+    async with continuous_typing(bot, message.chat.id):
+        result = await processor.process_message(message, input_type, bot)
+
+    # Send response with product cards if available
+    user_lang = message.from_user.language_code if message.from_user else None
+    await _send_response_with_products(
+        message, bot, result, fallback_language_code=user_lang
+    )
+
+
 async def _send_response_with_products(
     message: Message,
     bot: Bot,
     result: ProcessingResult,
+    fallback_language_code: str | None = None,
 ) -> None:
     """Send response, using product cards if products are available.
 
@@ -112,23 +157,30 @@ async def _send_response_with_products(
         message: The original message to reply to.
         bot: The Bot instance.
         result: The processing result with response and optional products.
+        fallback_language_code: Fallback language code if NLP doesn't detect one.
     """
     # Extract products from response
     products = _extract_products_from_response(result)
 
+    # Use detected language from NLP, fallback to Telegram language
+    detected_lang = _extract_detected_language(result)
+    language_code = detected_lang or fallback_language_code
+
     if products and len(products) > 0:
-        # Store products in cache for pagination navigation
+        # Store products in cache for pagination navigation (with language)
         cache = get_product_cache()
-        cache.store(message.chat.id, products)
+        cache.store(message.chat.id, products, language_code=language_code)
 
         # Send first product as card with pagination
         first_product = products[0]
         total = len(products)
 
         logger.info(
-            "Sending product card: %s (%d total, cached for navigation)",
+            "Sending product card: %s (%d total, cached, detected_lang=%s, fallback=%s)",
             first_product.get("name", "Unknown"),
             total,
+            detected_lang,
+            fallback_language_code,
         )
 
         # Send product card (no additional text - card is self-explanatory)
@@ -138,49 +190,12 @@ async def _send_response_with_products(
             product=first_product,
             page=0,
             total=total,
+            language_code=language_code,
         )
         # Product cards are self-contained, no need to send duplicate text
     elif result.response:
         # No products, send regular text response
         await _safe_answer(message, result.response)
-
-
-# Welcome message for /start command
-START_MESSAGE = """
-<b>¡Bienvenido!</b> 👋
-
-Soy un bot de Telegram con soporte para webhook.
-
-Puedo procesar diferentes tipos de mensajes:
-• Texto
-• Fotos
-• Documentos
-• Videos
-• Audio
-• Ubicaciones
-• Y más...
-
-Usa /help para ver los comandos disponibles.
-"""
-
-# Help message
-HELP_MESSAGE = """
-<b>Comandos disponibles:</b>
-
-/start - Iniciar el bot
-/help - Mostrar esta ayuda
-
-<b>Tipos de contenido soportados:</b>
-• Mensajes de texto
-• Fotos e imágenes
-• Documentos y archivos
-• Videos y animaciones
-• Mensajes de voz y audio
-• Ubicaciones y lugares
-• Contactos
-• Encuestas
-• Stickers
-"""
 
 
 def create_message_router() -> Router:
@@ -256,14 +271,16 @@ def create_message_router() -> Router:
         """Handle the /start command."""
         classifier.classify(message)
         logger.info("User %s started the bot", message.from_user)
-        await _safe_answer(message, START_MESSAGE)
+        user_lang = message.from_user.language_code if message.from_user else None
+        await _safe_answer(message, get_localized_message("start_message", user_lang))
 
     @router.message(Command("help"))
     async def handle_help(message: Message) -> None:
         """Handle the /help command."""
         classifier.classify(message)
         logger.info("User %s requested help", message.from_user)
-        await _safe_answer(message, HELP_MESSAGE)
+        user_lang = message.from_user.language_code if message.from_user else None
+        await _safe_answer(message, get_localized_message("help_message", user_lang))
 
     # Register media handlers dynamically
     for filter_obj, type_name in media_filters:
@@ -274,57 +291,25 @@ def create_message_router() -> Router:
     @router.message(F.text)
     async def handle_text(message: Message, bot: Bot) -> None:
         """Handle plain text messages via NLP service."""
-        input_type = classifier.classify(message)
-        processor = get_processor()
-
-        # Continuous typing indicator - refreshes every 4s while LLM processes
-        async with continuous_typing(bot, message.chat.id):
-            result = await processor.process_message(message, input_type, bot)
-
-        # Send response with product cards if available
-        await _send_response_with_products(message, bot, result)
+        await _process_and_respond(message, bot, classifier)
 
     # Register voice handler
     @router.message(F.voice)
     async def handle_voice(message: Message, bot: Bot) -> None:
         """Handle voice messages via ASR + NLP service."""
-        input_type = classifier.classify(message)
-        processor = get_processor()
-
-        # Continuous typing - ASR + NLP can take several seconds
-        async with continuous_typing(bot, message.chat.id):
-            result = await processor.process_message(message, input_type, bot)
-
-        # Send response with product cards if available
-        await _send_response_with_products(message, bot, result)
+        await _process_and_respond(message, bot, classifier)
 
     # Register audio handler
     @router.message(F.audio)
     async def handle_audio(message: Message, bot: Bot) -> None:
         """Handle audio messages via ASR + NLP service."""
-        input_type = classifier.classify(message)
-        processor = get_processor()
-
-        # Continuous typing - ASR + NLP can take several seconds
-        async with continuous_typing(bot, message.chat.id):
-            result = await processor.process_message(message, input_type, bot)
-
-        # Send response with product cards if available
-        await _send_response_with_products(message, bot, result)
+        await _process_and_respond(message, bot, classifier)
 
     # Register photo handler
     @router.message(F.photo)
     async def handle_photo(message: Message, bot: Bot) -> None:
         """Handle photo messages via OCR + NLP service."""
-        input_type = classifier.classify(message)
-        processor = get_processor()
-
-        # Continuous typing - OCR + NLP can take several seconds
-        async with continuous_typing(bot, message.chat.id):
-            result = await processor.process_message(message, input_type, bot)
-
-        # Send response with product cards if available
-        await _send_response_with_products(message, bot, result)
+        await _process_and_respond(message, bot, classifier)
 
     # Register fallback handler
     @router.message()

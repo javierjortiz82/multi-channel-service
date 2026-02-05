@@ -1,0 +1,77 @@
+{
+  "_meta": {
+    "description": "User-facing messages for the Telegram bot",
+    "default_language": "es",
+    "supported_languages": ["es", "en", "pt", "fr", "ar"]
+  },
+  "es": {
+    "nlp_failed": "Lo siento, hubo un error procesando tu mensaje. Por favor intenta de nuevo.",
+    "asr_failed": "No pude transcribir el audio. Por favor intenta de nuevo.",
+    "ocr_failed": "No pude procesar la imagen. Por favor intenta de nuevo.",
+    "download_failed": "No pude descargar el archivo. Por favor intenta de nuevo.",
+    "empty_text": "No recibí ningún texto para procesar.",
+    "empty_audio": "No pude obtener el audio del mensaje.",
+    "unsupported": "Este tipo de contenido no está soportado aún. Por favor envía texto o audio.",
+    "no_text_in_image": "He recibido tu imagen, pero no encontré texto para procesar.",
+    "low_confidence": "No pude entender claramente el audio. Por favor, habla más despacio y claro, o reduce el ruido de fondo.",
+    "no_objects_detected": "No pude identificar objetos en la imagen. Por favor intenta con otra foto.",
+    "start_message": "<b>¡Bienvenido!</b> 👋\n\nSoy un asistente inteligente de Telegram.\n\nPuedo procesar diferentes tipos de mensajes:\n• Texto\n• Fotos\n• Audio y Voz\n• Documentos\n\nUsa /help para ver los comandos disponibles.",
+    "help_message": "<b>Comandos disponibles:</b>\n\n/start - Iniciar el bot\n/help - Mostrar esta ayuda\n\n<b>Tipos de contenido soportados:</b>\n• Mensajes de texto\n• Fotos e imágenes\n• Mensajes de voz y audio\n• Documentos y archivos"
+  },
+  "en": {
+    "nlp_failed": "Sorry, there was an error processing your message. Please try again.",
+    "asr_failed": "I couldn't transcribe the audio. Please try again.",
+    "ocr_failed": "I couldn't process the image. Please try again.",
+    "download_failed": "I couldn't download the file. Please try again.",
+    "empty_text": "I didn't receive any text to process.",
+    "empty_audio": "I couldn't get the audio from the message.",
+    "unsupported": "This content type is not supported yet. Please send text or audio.",
+    "no_text_in_image": "I received your image, but I couldn't find any text to process.",
+    "low_confidence": "I couldn't clearly understand the audio. Please speak more slowly and clearly, or reduce background noise.",
+    "no_objects_detected": "I couldn't identify objects in the image. Please try another photo.",
+    "start_message": "<b>Welcome!</b> 👋\n\nI'm an intelligent Telegram assistant.\n\nI can process different types of messages:\n• Text\n• Photos\n• Audio and Voice\n• Documents\n\nUse /help to see available commands.",
+    "help_message": "<b>Available commands:</b>\n\n/start - Start the bot\n/help - Show this help\n\n<b>Supported content types:</b>\n• Text messages\n• Photos and images\n• Voice and audio messages\n• Documents and files"
+  },
+  "pt": {
+    "nlp_failed": "Desculpe, houve um erro ao processar sua mensagem. Por favor, tente novamente.",
+    "asr_failed": "Não consegui transcrever o áudio. Por favor, tente novamente.",
+    "ocr_failed": "Não consegui processar a imagem. Por favor, tente novamente.",
+    "download_failed": "Não consegui baixar o arquivo. Por favor, tente novamente.",
+    "empty_text": "Não recebi nenhum texto para processar.",
+    "empty_audio": "Não consegui obter o áudio da mensagem.",
+    "unsupported": "Este tipo de conteúdo ainda não é suportado. Por favor, envie texto ou áudio.",
+    "no_text_in_image": "Recebi sua imagem, mas não encontrei texto para processar.",
+    "low_confidence": "Não consegui entender claramente o áudio. Por favor, fale mais devagar e claramente, ou reduza o ruído de fundo.",
+    "no_objects_detected": "Não consegui identificar objetos na imagem. Por favor, tente outra foto.",
+    "start_message": "<b>Bem-vindo!</b> 👋\n\nSou um assistente inteligente do Telegram.\n\nPosso processar diferentes tipos de mensagens:\n• Texto\n• Fotos\n• Áudio e Voz\n• Documentos\n\nUse /help para ver os comandos disponíveis.",
+    "help_message": "<b>Comandos disponíveis:</b>\n\n/start - Iniciar o bot\n/help - Mostrar esta ajuda\n\n<b>Tipos de conteúdo suportados:</b>\n• Mensagens de texto\n• Fotos e imagens\n• Mensagens de voz e áudio\n• Documentos e arquivos"
+  },
+  "fr": {
+    "nlp_failed": "Désolé, une erreur s'est produite lors du traitement de votre message. Veuillez réessayer.",
+    "asr_failed": "Je n'ai pas pu transcrire l'audio. Veuillez réessayer.",
+    "ocr_failed": "Je n'ai pas pu traiter l'image. Veuillez réessayer.",
+    "download_failed": "Je n'ai pas pu télécharger le fichier. Veuillez réessayer.",
+    "empty_text": "Je n'ai reçu aucun texte à traiter.",
+    "empty_audio": "Je n'ai pas pu obtenir l'audio du message.",
+    "unsupported": "Ce type de contenu n'est pas encore pris en charge. Veuillez envoyer du texte ou de l'audio.",
+    "no_text_in_image": "J'ai reçu votre image, mais je n'ai trouvé aucun texte à traiter.",
+    "low_confidence": "Je n'ai pas pu comprendre clairement l'audio. Veuillez parler plus lentement et clairement, ou réduire le bruit de fond.",
+    "no_objects_detected": "Je n'ai pas pu identifier d'objets dans l'image. Veuillez essayer une autre photo.",
+    "start_message": "<b>Bienvenue !</b> 👋\n\nJe suis un assistant Telegram intelligent.\n\nJe peux traiter différents types de messages :\n• Texte\n• Photos\n• Audio et Voix\n• Documents\n\nUtilisez /help pour voir les commandes disponibles.",
+    "help_message": "<b>Commandes disponibles :</b>\n\n/start - Démarrer le bot\n/help - Afficher cette aide\n\n<b>Types de contenu pris en charge :</b>\n• Messages texte\n• Photos et images\n• Messages vocaux et audio\n• Documents et fichiers"
+  },
+  "ar": {
+    "nlp_failed": "عذراً، حدث خطأ أثناء معالجة رسالتك. يرجى المحاولة مرة أخرى.",
+    "asr_failed": "لم أتمكن من تحويل الصوت إلى نص. يرجى المحاولة مرة أخرى.",
+    "ocr_failed": "لم أتمكن من معالجة الصورة. يرجى المحاولة مرة أخرى.",
+    "download_failed": "لم أتمكن من تحميل الملف. يرجى المحاولة مرة أخرى.",
+    "empty_text": "لم أستلم أي نص للمعالجة.",
+    "empty_audio": "لم أتمكن من الحصول على الصوت من الرسالة.",
+    "unsupported": "هذا النوع من المحتوى غير مدعوم حالياً. يرجى إرسال نص أو صوت.",
+    "no_text_in_image": "استلمت صورتك، لكن لم أجد أي نص للمعالجة.",
+    "low_confidence": "لم أتمكن من فهم الصوت بوضوح. يرجى التحدث ببطء ووضوح أكثر، أو تقليل الضوضاء المحيطة.",
+    "no_objects_detected": "لم أتمكن من تحديد أي أجسام في الصورة. يرجى تجربة صورة أخرى.",
+    "start_message": "<b>مرحباً!</b> 👋\n\nأنا مساعد ذكي على تيليجرام.\n\nيمكنني معالجة أنواع مختلفة من الرسائل:\n• النصوص\n• الصور\n• الصوت\n• المستندات\n\nاستخدم /help لعرض الأوامر المتاحة.",
+    "help_message": "<b>الأوامر المتاحة:</b>\n\n/start - بدء البوت\n/help - عرض هذه المساعدة\n\n<b>أنواع المحتوى المدعومة:</b>\n• الرسائل النصية\n• الصور\n• الرسائل الصوتية\n• المستندات والملفات"
+  }
+}

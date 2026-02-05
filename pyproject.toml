@@ -44,8 +44,6 @@ dev = [
     "pytest-cov>=5.0.0,<6.0.0",
     "ruff>=0.7.0,<1.0.0",
     "mypy>=1.12.0,<2.0.0",
-    "black>=24.10.0,<25.0.0",
-    "isort>=5.13.0,<6.0.0",
     "bandit>=1.7.0,<2.0.0",
 ]
 
@@ -85,15 +83,6 @@ select = [
     "SIM",    # flake8-simplify
 ]
 ignore = ["E501"]
-
-[tool.black]
-line-length = 88
-target-version = ["py310"]
-
-[tool.isort]
-profile = "black"
-line_length = 88
-src_paths = ["src"]
 
 [tool.mypy]
 python_version = "3.10"

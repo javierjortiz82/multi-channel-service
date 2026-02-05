@@ -233,6 +233,20 @@ class Settings(BaseSettings):
         description="Rate limit window in seconds",
     )
 
+    # Internal Service URLs (Cloud Run)
+    nlp_service_url: str = Field(
+        default="https://nlp-service-4k3haexkga-uc.a.run.app",
+        description="URL of NLP service for Gemini processing",
+    )
+    asr_service_url: str = Field(
+        default="https://asr-service-4k3haexkga-uc.a.run.app",
+        description="URL of ASR service for audio transcription",
+    )
+    ocr_service_url: str = Field(
+        default="https://ocr-service-4k3haexkga-uc.a.run.app",
+        description="URL of OCR service for image analysis",
+    )
+
     @field_validator("webhook_path")
     @classmethod
     def validate_webhook_path(cls, v: str) -> str:

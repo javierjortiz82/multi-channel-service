@@ -11,6 +11,7 @@ Features:
     - Separate error log file
 """
 
+import contextlib
 import logging
 import logging.handlers
 import os
@@ -96,16 +97,12 @@ def _try_acquire_banner_lock() -> bool:
     except FileExistsError:
         return False
     except OSError as e:
-        # Log unexpected errors for debugging
-        import logging
-
+        # Log unexpected errors for debugging (use module-level logging)
         logging.getLogger(__name__).debug("Banner lock acquisition failed: %s", e)
         return False
     finally:
         # Always close the file descriptor if it was opened
         if fd is not None:
-            import contextlib
-
             with contextlib.suppress(OSError):
                 os.close(fd)
 
@@ -116,9 +113,7 @@ def _cleanup_banner_flag() -> None:
         if _BANNER_FLAG_PATH.exists():
             _BANNER_FLAG_PATH.unlink()
     except OSError as e:
-        # Log cleanup failures for debugging (non-critical)
-        import logging
-
+        # Log cleanup failures for debugging (non-critical, use module-level logging)
         logging.getLogger(__name__).debug("Banner flag cleanup failed: %s", e)
 
 

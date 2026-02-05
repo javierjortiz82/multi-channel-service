@@ -23,13 +23,14 @@ Example:
 
 import asyncio
 import contextlib
-import os
 import random
 import time
+import uuid
 from typing import Any
 
 import httpx
 
+from telegram_bot.config.settings import get_settings
 from telegram_bot.logging_config import get_logger
 
 logger = get_logger("internal_client")
@@ -82,22 +83,14 @@ class InternalServiceClient:
         """Initialize the internal service client.
 
         Args:
-            nlp_service_url: URL of nlp-service (or set NLP_SERVICE_URL env)
-            asr_service_url: URL of asr-service (or set ASR_SERVICE_URL env)
-            ocr_service_url: URL of ocr-service (or set OCR_SERVICE_URL env)
+            nlp_service_url: URL of nlp-service (defaults to settings/env)
+            asr_service_url: URL of asr-service (defaults to settings/env)
+            ocr_service_url: URL of ocr-service (defaults to settings/env)
         """
-        self.nlp_url = nlp_service_url or os.getenv(
-            "NLP_SERVICE_URL",
-            "https://nlp-service-4k3haexkga-uc.a.run.app",
-        )
-        self.asr_url = asr_service_url or os.getenv(
-            "ASR_SERVICE_URL",
-            "https://asr-service-4k3haexkga-uc.a.run.app",
-        )
-        self.ocr_url = ocr_service_url or os.getenv(
-            "OCR_SERVICE_URL",
-            "https://ocr-service-4k3haexkga-uc.a.run.app",
-        )
+        settings = get_settings()
+        self.nlp_url = nlp_service_url or settings.nlp_service_url
+        self.asr_url = asr_service_url or settings.asr_service_url
+        self.ocr_url = ocr_service_url or settings.ocr_service_url
 
         # Token cache: {audience: (token, expiry_time)}
         self._token_cache: dict[str, tuple[str, float]] = {}
@@ -205,10 +198,8 @@ class InternalServiceClient:
                     )
                     raise
 
-        # Should not reach here, but just in case
-        if last_exception:
-            raise last_exception
-        raise RuntimeError("Unexpected state in retry loop")
+        # Exhausted retries - raise last exception or error
+        raise last_exception or RuntimeError("Exhausted retries in request loop")
 
     def _calculate_retry_delay(self, attempt: int) -> float:
         """Calculate delay with exponential backoff and jitter.
@@ -419,8 +410,6 @@ class InternalServiceClient:
         Raises:
             httpx.HTTPStatusError: If the request fails
         """
-        import uuid
-
         token = await self._get_identity_token(self.asr_url)
         headers = {
             "Authorization": f"Bearer {token}",

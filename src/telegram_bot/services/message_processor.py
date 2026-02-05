@@ -17,82 +17,16 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
+import httpx
 from aiogram import Bot
 from aiogram.types import Message
 
 from telegram_bot.logging_config import get_logger
 from telegram_bot.services.input_classifier import InputType
 from telegram_bot.services.internal_client import get_client
+from telegram_bot.utils.i18n import get_localized_message
 
 logger = get_logger("message_processor")
-
-# =============================================================================
-# Internationalized Error Messages
-# =============================================================================
-ERROR_MESSAGES: dict[str, dict[str, str]] = {
-    "es": {
-        "nlp_failed": "Lo siento, hubo un error procesando tu mensaje. Por favor intenta de nuevo.",
-        "asr_failed": "No pude transcribir el audio. Por favor intenta de nuevo.",
-        "ocr_failed": "No pude procesar la imagen. Por favor intenta de nuevo.",
-        "download_failed": "No pude descargar el archivo. Por favor intenta de nuevo.",
-        "empty_text": "No recibí ningún texto para procesar.",
-        "empty_audio": "No pude obtener el audio del mensaje.",
-        "unsupported": "Este tipo de contenido no está soportado aún. Por favor envía texto o audio.",
-        "no_text_in_image": "He recibido tu imagen, pero no encontré texto para procesar.",
-        "low_confidence": "No pude entender claramente el audio. Por favor, habla más despacio y claro, o reduce el ruido de fondo.",
-        "no_objects_detected": "No pude identificar objetos en la imagen. Por favor intenta con otra foto.",
-    },
-    "en": {
-        "nlp_failed": "Sorry, there was an error processing your message. Please try again.",
-        "asr_failed": "I couldn't transcribe the audio. Please try again.",
-        "ocr_failed": "I couldn't process the image. Please try again.",
-        "download_failed": "I couldn't download the file. Please try again.",
-        "empty_text": "I didn't receive any text to process.",
-        "empty_audio": "I couldn't get the audio from the message.",
-        "unsupported": "This content type is not supported yet. Please send text or audio.",
-        "no_text_in_image": "I received your image, but I couldn't find any text to process.",
-        "low_confidence": "I couldn't clearly understand the audio. Please speak more slowly and clearly, or reduce background noise.",
-        "no_objects_detected": "I couldn't identify objects in the image. Please try another photo.",
-    },
-    "pt": {
-        "nlp_failed": "Desculpe, houve um erro ao processar sua mensagem. Por favor, tente novamente.",
-        "asr_failed": "Não consegui transcrever o áudio. Por favor, tente novamente.",
-        "ocr_failed": "Não consegui processar a imagem. Por favor, tente novamente.",
-        "download_failed": "Não consegui baixar o arquivo. Por favor, tente novamente.",
-        "empty_text": "Não recebi nenhum texto para processar.",
-        "empty_audio": "Não consegui obter o áudio da mensagem.",
-        "unsupported": "Este tipo de conteúdo ainda não é suportado. Por favor, envie texto ou áudio.",
-        "no_text_in_image": "Recebi sua imagem, mas não encontrei texto para processar.",
-        "low_confidence": "Não consegui entender claramente o áudio. Por favor, fale mais devagar e claramente, ou reduza o ruído de fundo.",
-        "no_objects_detected": "Não consegui identificar objetos na imagem. Por favor, tente outra foto.",
-    },
-    "fr": {
-        "nlp_failed": "Désolé, une erreur s'est produite lors du traitement de votre message. Veuillez réessayer.",
-        "asr_failed": "Je n'ai pas pu transcrire l'audio. Veuillez réessayer.",
-        "ocr_failed": "Je n'ai pas pu traiter l'image. Veuillez réessayer.",
-        "download_failed": "Je n'ai pas pu télécharger le fichier. Veuillez réessayer.",
-        "empty_text": "Je n'ai reçu aucun texte à traiter.",
-        "empty_audio": "Je n'ai pas pu obtenir l'audio du message.",
-        "unsupported": "Ce type de contenu n'est pas encore pris en charge. Veuillez envoyer du texte ou de l'audio.",
-        "no_text_in_image": "J'ai reçu votre image, mais je n'ai trouvé aucun texte à traiter.",
-        "low_confidence": "Je n'ai pas pu comprendre clairement l'audio. Veuillez parler plus lentement et clairement, ou réduire le bruit de fond.",
-        "no_objects_detected": "Je n'ai pas pu identifier d'objets dans l'image. Veuillez essayer une autre photo.",
-    },
-    "ar": {
-        "nlp_failed": "عذراً، حدث خطأ أثناء معالجة رسالتك. يرجى المحاولة مرة أخرى.",
-        "asr_failed": "لم أتمكن من تحويل الصوت إلى نص. يرجى المحاولة مرة أخرى.",
-        "ocr_failed": "لم أتمكن من معالجة الصورة. يرجى المحاولة مرة أخرى.",
-        "download_failed": "لم أتمكن من تحميل الملف. يرجى المحاولة مرة أخرى.",
-        "empty_text": "لم أستلم أي نص للمعالجة.",
-        "empty_audio": "لم أتمكن من الحصول على الصوت من الرسالة.",
-        "unsupported": "هذا النوع من المحتوى غير مدعوم حالياً. يرجى إرسال نص أو صوت.",
-        "no_text_in_image": "استلمت صورتك، لكن لم أجد أي نص للمعالجة.",
-        "low_confidence": "لم أتمكن من فهم الصوت بوضوح. يرجى التحدث ببطء ووضوح أكثر، أو تقليل الضوضاء المحيطة.",
-        "no_objects_detected": "لم أتمكن من تحديد أي أجسام في الصورة. يرجى تجربة صورة أخرى.",
-    },
-}
-
-DEFAULT_LANGUAGE = "es"
 
 
 def _extract_error_code(error: Exception) -> str | None:
@@ -104,8 +38,6 @@ def _extract_error_code(error: Exception) -> str | None:
     Returns:
         Error code string if found, None otherwise.
     """
-    import httpx
-
     if isinstance(error, httpx.HTTPStatusError):
         try:
             response_data: dict[str, Any] = error.response.json()
@@ -117,7 +49,9 @@ def _extract_error_code(error: Exception) -> str | None:
 
 
 def _get_message(key: str, language_code: str | None) -> str:
-    """Get localized error message based on user's language.
+    """Get localized message based on user's language.
+
+    Delegates to the shared i18n utility which loads from locales/messages.json.
 
     Args:
         key: Message key (e.g., 'asr_failed', 'nlp_failed')
@@ -126,10 +60,7 @@ def _get_message(key: str, language_code: str | None) -> str:
     Returns:
         Localized message string
     """
-    # Handle codes like 'en-US' -> 'en'
-    lang = language_code.split("-")[0].lower() if language_code else DEFAULT_LANGUAGE
-    messages = ERROR_MESSAGES.get(lang, ERROR_MESSAGES[DEFAULT_LANGUAGE])
-    return messages.get(key, ERROR_MESSAGES[DEFAULT_LANGUAGE][key])
+    return get_localized_message(key, language_code)
 
 
 class ProcessingStatus(str, Enum):

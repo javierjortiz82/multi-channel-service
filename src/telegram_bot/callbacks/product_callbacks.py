@@ -12,6 +12,9 @@ Example:
     dp.include_router(create_callback_router())
 """
 
+import re
+from typing import Any
+
 from aiogram import Bot, Router
 from aiogram.types import (
     CallbackQuery,
@@ -27,12 +30,14 @@ from telegram_bot.callbacks.callback_data import (
     ProductCallback,
 )
 from telegram_bot.components.product_card import (
+    _get_button_label,
     build_product_keyboard,
     format_product_caption,
 )
 from telegram_bot.logging_config import get_logger
 from telegram_bot.services.internal_client import get_client
 from telegram_bot.services.product_cache import get_product_cache
+from telegram_bot.utils.formatting import format_price
 
 logger = get_logger("callbacks.product")
 
@@ -77,10 +82,9 @@ def create_callback_router() -> Router:
             await _handle_details(callback, product_id, chat_id, bot)
         elif action == "cart":
             await _handle_add_to_cart(callback, product_id, chat_id, bot)
-        elif action == "prev":
-            await _handle_navigation(callback, chat_id, page - 1, total, bot)
-        elif action == "next":
-            await _handle_navigation(callback, chat_id, page + 1, total, bot)
+        elif action in ("prev", "next"):
+            # page already contains the target page (set in keyboard builder)
+            await _handle_navigation(callback, chat_id, page, total, bot)
         elif action == "noop":
             await callback.answer()
 
@@ -153,6 +157,56 @@ def create_callback_router() -> Router:
     return router
 
 
+def _get_user_language(
+    callback: CallbackQuery,
+    chat_id: int,
+) -> str | None:
+    """Get user's language from cache or Telegram profile.
+
+    Args:
+        callback: The callback query.
+        chat_id: The chat ID.
+
+    Returns:
+        Language code or None.
+    """
+    cache = get_product_cache()
+    return cache.get_language(chat_id) or (
+        callback.from_user.language_code if callback.from_user else None
+    )
+
+
+def _collect_product_images(product: dict[str, Any]) -> list[str]:
+    """Collect all image URLs from a product.
+
+    Args:
+        product: Product dictionary
+
+    Returns:
+        List of image URLs (main image first, then additional)
+    """
+    images: list[str] = []
+
+    # Primary image
+    main_image = product.get("image_url", "")
+    if main_image:
+        images.append(main_image)
+
+    # Additional images (check common field names)
+    for field in ["images", "additional_images", "gallery", "photos"]:
+        extra = product.get(field, [])
+        if isinstance(extra, list):
+            for img in extra:
+                if isinstance(img, str) and img and img not in images:
+                    images.append(img)
+                elif isinstance(img, dict):
+                    url = img.get("url") or img.get("src") or img.get("image_url")
+                    if url and url not in images:
+                        images.append(url)
+
+    return images
+
+
 async def _handle_details(
     callback: CallbackQuery,
     product_id: int,
@@ -161,7 +215,7 @@ async def _handle_details(
 ) -> None:
     """Handle product details request.
 
-    Shows full product details with expanded description.
+    Shows full product details with all images and complete information.
 
     Args:
         callback: The callback query
@@ -182,93 +236,153 @@ async def _handle_details(
         await callback.answer("Producto no encontrado", show_alert=True)
         return
 
-    # Build detailed view
+    # Extract all product fields
     name = product.get("name", "Producto")
-    price_raw = product.get("price", 0)
-    description = product.get("description", "Sin descripción")
+    price_str = format_price(product.get("price"))
+    description = product.get("description", "")
     brand = product.get("brand", "")
     category = product.get("category", "")
     sku = product.get("sku", "")
+    stock = product.get("stock", "")
+    condition = product.get("condition", "")
+    warranty = product.get("warranty", "")
 
     # Real estate fields
     bedrooms = product.get("bedrooms", "")
     bathrooms = product.get("bathrooms", "")
-    sqft_raw = product.get("sqft", "")
+    sqft_raw = product.get("sqft", "") or product.get("area", "")
     location = product.get("location", "")
+    year_built = product.get("year_built", "")
+    property_type = product.get("property_type", "")
 
-    # Format price (handle string/int/float)
-    try:
-        price = float(price_raw) if price_raw else 0
-        price_str = f"${price:,.0f}" if price >= 1_000_000 else f"${price:,.2f}"
-    except (ValueError, TypeError):
-        price_str = str(price_raw) if price_raw else "Consultar"
-
-    # Format sqft (handle string/int/float)
+    # Format sqft
     try:
         sqft = int(float(sqft_raw)) if sqft_raw else 0
     except (ValueError, TypeError):
         sqft = 0
 
-    # Build detailed message
-    details = f"<b>📦 {name}</b>\n\n"
-    details += f"💰 <b>Precio:</b> {price_str}\n"
+    # Build detailed message - ONLY show details not in main card
+    details = f"<b>📋 DETALLES: {name}</b>\n"
+    details += "─" * 20 + "\n\n"
+
+    # Price (always show)
+    details += f"💰 <b>Precio:</b> {price_str}\n\n"
+
+    # Product specs section
+    specs_added = False
 
     if brand:
         details += f"🏷️ <b>Marca:</b> {brand}\n"
+        specs_added = True
     if category:
         details += f"📁 <b>Categoría:</b> {category}\n"
+        specs_added = True
     if sku:
         details += f"🔢 <b>SKU:</b> {sku}\n"
+        specs_added = True
+    if stock:
+        details += f"📦 <b>Stock:</b> {stock}\n"
+        specs_added = True
+    if condition:
+        details += f"✨ <b>Condición:</b> {condition}\n"
+        specs_added = True
+    if warranty:
+        details += f"🛡️ <b>Garantía:</b> {warranty}\n"
+        specs_added = True
 
-    # Real estate details
+    # Real estate section
     if location:
+        if specs_added:
+            details += "\n"
         details += f"📍 <b>Ubicación:</b> {location}\n"
+        specs_added = True
+    if property_type:
+        details += f"🏠 <b>Tipo:</b> {property_type}\n"
     if bedrooms:
         details += f"🛏️ <b>Habitaciones:</b> {bedrooms}\n"
     if bathrooms:
         details += f"🚿 <b>Baños:</b> {bathrooms}\n"
     if sqft:
         details += f"📐 <b>Área:</b> {sqft:,} sq ft\n"
+    if year_built:
+        details += f"📅 <b>Año:</b> {year_built}\n"
 
-    details += f"\n<b>Descripción:</b>\n{description}"
+    # Description section (full, not truncated)
+    if description:
+        details += "\n" + "─" * 20 + "\n"
+        details += f"<b>📝 Descripción:</b>\n{description}\n"
 
-    # Back button
+    # Get cached language for localized buttons
+    lang = _get_user_language(callback, chat_id)
+
+    # Keyboard with actions
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="🛒 Agregar al Carrito",
+                    text=_get_button_label("add_to_cart", lang),
                     callback_data=ProductCallback(
                         action="cart",
                         product_id=product_id,
                     ).pack(),
                 ),
             ],
-            [
-                InlineKeyboardButton(
-                    text="◀️ Volver",
-                    callback_data=ProductCallback(
-                        action="back",
-                        product_id=product_id,
-                        page=0,
-                        total=len(products),
-                    ).pack(),
-                ),
-            ],
         ]
     )
 
-    # Send details message
+    # Collect all images
+    images = _collect_product_images(product)
+
     try:
-        await bot.send_message(
-            chat_id=chat_id,
-            text=details,
-            parse_mode="HTML",
-            reply_markup=keyboard,
-        )
+        if len(images) > 1:
+            # Send multiple images as media group (max 10)
+            media_group = [
+                InputMediaPhoto(
+                    media=img,
+                    caption=details if i == 0 else None,
+                    parse_mode="HTML" if i == 0 else None,
+                )
+                for i, img in enumerate(images[:10])
+            ]
+            await bot.send_media_group(chat_id=chat_id, media=media_group)
+
+            # Send keyboard separately (media groups don't support inline keyboards)
+            await bot.send_message(
+                chat_id=chat_id,
+                text=_get_button_label("interested", lang),
+                reply_markup=keyboard,
+            )
+        elif images:
+            # Single image with caption
+            await bot.send_photo(
+                chat_id=chat_id,
+                photo=images[0],
+                caption=details,
+                parse_mode="HTML",
+                reply_markup=keyboard,
+            )
+        else:
+            # No images - text only
+            await bot.send_message(
+                chat_id=chat_id,
+                text=details,
+                parse_mode="HTML",
+                reply_markup=keyboard,
+            )
+
     except Exception as e:
         logger.error("Failed to send product details: %s", e)
-        await callback.answer("Error mostrando detalles", show_alert=True)
+        # Fallback to text only
+        try:
+            await bot.send_message(
+                chat_id=chat_id,
+                text=details,
+                parse_mode="HTML",
+                reply_markup=keyboard,
+            )
+        except Exception as e2:
+            logger.error("Fallback also failed: %s", e2)
+            await callback.answer("Error mostrando detalles", show_alert=True)
 
 
 async def _handle_add_to_cart(
@@ -309,12 +423,15 @@ async def _handle_add_to_cart(
             conversation_id=conversation_id,
         )
 
-        # Build keyboard with "Ver Carrito" button
+        # Get cached language for localized buttons
+        lang = _get_user_language(callback, chat_id)
+
+        # Build keyboard with "View Cart" button
         keyboard = InlineKeyboardMarkup(
             inline_keyboard=[
                 [
                     InlineKeyboardButton(
-                        text="🛒 Ver Carrito",
+                        text=_get_button_label("view_cart", lang),
                         callback_data=CartCallback(
                             action="view",
                             conversation_id=conversation_id,
@@ -325,9 +442,12 @@ async def _handle_add_to_cart(
         )
 
         # Always send confirmation with product name (NLP response may be empty)
+        confirmation = _get_button_label("added_to_cart", lang).replace(
+            "{name}", product_name
+        )
         await bot.send_message(
             chat_id=chat_id,
-            text=f"✅ <b>{product_name}</b> agregado al carrito",
+            text=confirmation,
             parse_mode="HTML",
             reply_markup=keyboard,
         )
@@ -372,11 +492,14 @@ async def _handle_navigation(
 
     # Build new caption and keyboard
     caption = format_product_caption(product)
+    # Use cached language (detected by NLP) instead of Telegram profile language
+    user_lang = _get_user_language(callback, chat_id)
     keyboard = build_product_keyboard(
         product_id=product.get("id", 0),
         page=new_page,
         total=total,
         show_pagination=True,
+        language_code=user_lang,
     )
 
     # Update message
@@ -437,8 +560,6 @@ def _parse_cart_items(response: str) -> int:
     Returns:
         Number of items found in cart
     """
-    import re
-
     # Match patterns like "1.", "2.", etc. at start of lines
     matches = re.findall(r"^\s*(\d+)\.", response, re.MULTILINE)
     return len(matches)
@@ -496,6 +617,37 @@ def _build_cart_item_buttons(
     return rows
 
 
+def _build_cart_action_row(
+    conversation_id: str,
+    lang: str | None,
+) -> list[InlineKeyboardButton]:
+    """Build the checkout + clear cart button row.
+
+    Args:
+        conversation_id: Conversation ID for callbacks.
+        lang: Language code for button labels.
+
+    Returns:
+        List of InlineKeyboardButton for checkout and clear actions.
+    """
+    return [
+        InlineKeyboardButton(
+            text=_get_button_label("checkout", lang),
+            callback_data=CartCallback(
+                action="checkout",
+                conversation_id=conversation_id,
+            ).pack(),
+        ),
+        InlineKeyboardButton(
+            text=_get_button_label("clear_cart", lang),
+            callback_data=CartCallback(
+                action="clear",
+                conversation_id=conversation_id,
+            ).pack(),
+        ),
+    ]
+
+
 async def _handle_view_cart(
     callback: CallbackQuery,
     conversation_id: str,
@@ -523,6 +675,9 @@ async def _handle_view_cart(
 
         response = result.get("response", "Tu carrito está vacío")
 
+        # Get cached language for localized buttons
+        lang = _get_user_language(callback, chat_id)
+
         # Check if cart has items (response contains price or items)
         cart_has_items = "$" in response or "item" in response.lower()
 
@@ -538,26 +693,7 @@ async def _handle_view_cart(
                     _build_cart_item_buttons(item_count, conversation_id)
                 )
 
-            # Add checkout and clear buttons at the bottom
-            keyboard_rows.append(
-                [
-                    InlineKeyboardButton(
-                        text="💳 Pagar",
-                        callback_data=CartCallback(
-                            action="checkout",
-                            conversation_id=conversation_id,
-                        ).pack(),
-                    ),
-                    InlineKeyboardButton(
-                        text="🗑️ Vaciar Todo",
-                        callback_data=CartCallback(
-                            action="clear",
-                            conversation_id=conversation_id,
-                        ).pack(),
-                    ),
-                ]
-            )
-
+            keyboard_rows.append(_build_cart_action_row(conversation_id, lang))
             keyboard = InlineKeyboardMarkup(inline_keyboard=keyboard_rows)
         else:
             keyboard = None
@@ -666,8 +802,7 @@ async def _handle_qty_change(
         delta: Quantity change (+1 or -1)
         bot: The Bot instance
     """
-    action_text = "Aumentando" if delta > 0 else "Reduciendo"
-    await callback.answer(f"{action_text} cantidad...")
+    await callback.answer()
 
     try:
         client = get_client()
@@ -687,28 +822,14 @@ async def _handle_qty_change(
         cart_response = result.get("response", "Cantidad actualizada")
         item_count = _parse_cart_items(cart_response)
 
+        # Get cached language for localized buttons
+        lang = _get_user_language(callback, chat_id)
+
         # Build keyboard
         keyboard_rows: list[list[InlineKeyboardButton]] = []
         if item_count > 0:
             keyboard_rows.extend(_build_cart_item_buttons(item_count, conversation_id))
-            keyboard_rows.append(
-                [
-                    InlineKeyboardButton(
-                        text="💳 Pagar",
-                        callback_data=CartCallback(
-                            action="checkout",
-                            conversation_id=conversation_id,
-                        ).pack(),
-                    ),
-                    InlineKeyboardButton(
-                        text="🗑️ Vaciar Todo",
-                        callback_data=CartCallback(
-                            action="clear",
-                            conversation_id=conversation_id,
-                        ).pack(),
-                    ),
-                ]
-            )
+            keyboard_rows.append(_build_cart_action_row(conversation_id, lang))
             keyboard = InlineKeyboardMarkup(inline_keyboard=keyboard_rows)
         else:
             keyboard = None
@@ -743,12 +864,15 @@ async def _handle_remove_confirm(
 
     chat_id = callback.message.chat.id if callback.message else 0
 
+    # Get cached language for localized buttons
+    lang = _get_user_language(callback, chat_id)
+
     # Build confirmation keyboard
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="✅ Sí, eliminar",
+                    text=_get_button_label("yes_delete", lang),
                     callback_data=CartItemCallback(
                         action="confirm_del",
                         item_idx=item_idx,
@@ -756,7 +880,7 @@ async def _handle_remove_confirm(
                     ).pack(),
                 ),
                 InlineKeyboardButton(
-                    text="❌ No, cancelar",
+                    text=_get_button_label("no_cancel", lang),
                     callback_data=CartItemCallback(
                         action="cancel_del",
                         item_idx=item_idx,
@@ -767,9 +891,12 @@ async def _handle_remove_confirm(
         ]
     )
 
+    confirm_text = _get_button_label("delete_confirm", lang).replace(
+        "{idx}", str(item_idx)
+    )
     await bot.send_message(
         chat_id=chat_id,
-        text=f"🗑️ <b>¿Eliminar el item {item_idx} del carrito?</b>",
+        text=confirm_text,
         parse_mode="HTML",
         reply_markup=keyboard,
     )
@@ -789,7 +916,7 @@ async def _handle_remove_item(
         item_idx: Item index in cart (1-based)
         bot: The Bot instance
     """
-    await callback.answer("Eliminando producto...")
+    await callback.answer()
 
     try:
         client = get_client()
@@ -808,28 +935,14 @@ async def _handle_remove_item(
         cart_response = result.get("response", "Producto eliminado")
         item_count = _parse_cart_items(cart_response)
 
+        # Get cached language for localized buttons
+        lang = _get_user_language(callback, chat_id)
+
         # Build keyboard
         keyboard_rows: list[list[InlineKeyboardButton]] = []
         if item_count > 0:
             keyboard_rows.extend(_build_cart_item_buttons(item_count, conversation_id))
-            keyboard_rows.append(
-                [
-                    InlineKeyboardButton(
-                        text="💳 Pagar",
-                        callback_data=CartCallback(
-                            action="checkout",
-                            conversation_id=conversation_id,
-                        ).pack(),
-                    ),
-                    InlineKeyboardButton(
-                        text="🗑️ Vaciar Todo",
-                        callback_data=CartCallback(
-                            action="clear",
-                            conversation_id=conversation_id,
-                        ).pack(),
-                    ),
-                ]
-            )
+            keyboard_rows.append(_build_cart_action_row(conversation_id, lang))
             keyboard = InlineKeyboardMarkup(inline_keyboard=keyboard_rows)
         else:
             keyboard = None
