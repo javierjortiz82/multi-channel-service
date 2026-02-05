@@ -12,6 +12,7 @@ Example:
     dp.include_router(create_callback_router())
 """
 
+import json
 import re
 from typing import Any
 
@@ -197,6 +198,12 @@ def _collect_product_images(product: dict[str, Any]) -> list[str]:
     # Additional images (check common field names)
     for field in ["images", "additional_images", "gallery", "photos"]:
         extra = product.get(field, [])
+        # Parse JSON string if needed (PostgreSQL json_agg returns string)
+        if isinstance(extra, str):
+            try:
+                extra = json.loads(extra)
+            except (json.JSONDecodeError, TypeError):
+                continue
         if isinstance(extra, list):
             for img in extra:
                 if isinstance(img, str) and img and img not in images:
